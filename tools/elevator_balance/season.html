@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>无尽电梯 · 首领赛季数值工作台</title><link rel="stylesheet" href="/style.css">
+<style>
+.top nav{display:flex;gap:1.2rem}.work>section{margin-bottom:1.6rem}.work h2{margin-top:0}
+.season-table{overflow-x:auto}.season-table table{min-width:34rem}fieldset{border:0;padding:0;margin:1rem 0}legend{font-weight:650}
+#fields,.skills{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.3rem}
+aside label>select[multiple]{height:5rem}.summary{display:flex;gap:1.3rem;flex-wrap:wrap;margin:1rem 0}
+.summary strong{font-size:1.5rem;display:block}.summary span{color:#596474;font-size:.85rem}
+details{margin:.55rem 0}summary{cursor:pointer}.work p{line-height:1.6}.work th,.work td{text-align:right}.work th:first-child,.work td:first-child{text-align:left}
+</style></head><body>
+<header class="top"><div><span class="mark" aria-hidden="true">↕</span><h1>无尽电梯 <span>首领赛季</span></h1></div>
+<nav><a href="/season-report" target="_blank">实测报告 ↗</a><a href="/legacy">旧版对照</a></nav></header>
+<main><aside><h2>模拟条件</h2>
+<label>地图<select id="map"></select></label><label>参考玩家<select id="preset"></select></label>
+<div class="twocol"><label>敌人强度倍率<input id="scale" type="number" min=".25" max="4" step=".05" value="1"></label>
+<label>开战生命比例<input id="health" type="number" min=".01" max="1" step=".05" value="1"></label></div>
+<label>观察楼层<input id="floors" value="4, 8, 18, 30, 50" aria-label="观察楼层，用逗号分隔"></label>
+<div class="twocol"><label>样本数<input id="samples" type="number" min="10" max="10000" value="500"></label><label>种子<input id="seed" type="number" min="0" value="261123"></label></div>
+<details><summary>装备与图鉴</summary><label>装备品质<select id="grade"><option value="green">绿</option><option value="blue">蓝</option><option value="purple">紫</option><option value="gold">金</option><option value="red">红</option></select></label>
+<div id="slots"></div><div class="twocol"><label>属性浮动<input id="roll" type="number" min=".9" max="1.1" step=".01" value="1"></label><label>撤离次数<input id="extracts" type="number" min="0" max="1000"></label></div>
+<label>普通藏品种数<input id="known" type="number" min="0" max="44"></label><div id="rainbow" class="skills"></div></details>
+<details><summary>调整游戏数值</summary><label>本次实验的参数 JSON<textarea id="overrides" rows="8" spellcheck="false">{}</textarea></label>
+<p>可改敌人曲线、装备底材、地图经济、箱价和回收价。只对本次计算生效。</p><button id="example" type="button">填入调参示例</button></details>
+<button class="primary" id="run">计算单场胜率</button>
+<fieldset><legend>远征策略</legend><label class="tick"><input id="usefield" type="checkbox" checked>使用途中拾取的临装</label>
+<div class="twocol"><label>携带咖啡<input id="coffee" type="number" min="0" max="8" value="2"></label><label>烟雾弹<input id="smoke" type="number" min="0" max="4" value="1"></label></div>
+<button id="trip">模拟清关撤离</button></fieldset><p id="status" role="status"></p><button id="download" disabled>导出本次结果</button></aside>
+<section class="work"><section><h2>单场对战</h2><p>各场从选定生命比例独立开战。首领保留剩余生命至分出胜负，表内剩余生命取击杀回血前的数值。</p>
+<details><summary>指定这场已经持有的局内道具</summary><p>按勾选顺序使用，最多三种限层增益。点击道具名称旁的说明可查看效果。</p><div id="fields"></div><p id="fielddesc" aria-live="polite"></p></details>
+<details><summary>首领整备药剂</summary><p>每次四回合交锋结束时，生命不超过 72% 就按列表顺序使用一件可用药剂，每种限一件。</p><div id="boss-medicine"></div></details>
+<div class="summary" id="panel"></div><div class="season-table" id="fights"></div></section>
+<section><h2>远征与经济</h2><p>从第一层出发，保最高价值的一件货，稳妥处理奇遇。到目标层清关后尝试撤离。购入补给和地图入场费计入净收益，单局道具只用实际拾到的种类。远征每种条件最多模拟 3,000 局。</p><div class="season-table" id="trips"></div>
+<h3>装备箱回收</h3><div class="season-table" id="boxes"></div></section></section></main>
+<script src="/season.js"></script></body></html>

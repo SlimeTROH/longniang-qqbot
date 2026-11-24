@@ -1,0 +1,56 @@
+{
+  "operation": "battle",
+  "map": "subway",
+  "floor": 8,
+  "horizon": 15,
+  "samples": 800,
+  "seed": 261123,
+  "hero": {
+    "extracts": 3,
+    "gear": [
+      {
+        "id": "crowbar",
+        "grade": "green",
+        "roll": 1
+      },
+      {
+        "id": "vest",
+        "grade": "green",
+        "roll": 1
+      },
+      {
+        "id": "belt",
+        "grade": "green",
+        "roll": 1
+      }
+    ],
+    "perks": [],
+    "sets": [],
+    "bonus": {
+      "hp": 0,
+      "atk": 0,
+      "def": 0,
+      "agi": 0,
+      "luk": 0
+    },
+    "hp_fraction": 1,
+    "shield": 0,
+    "atk_boost": 0
+  },
+  "config": {
+    "equipment": {
+      "crowbar": {
+        "atk": 14,
+        "def": 2
+      }
+    }
+  },
+  "policy": {
+    "combat": "fight",
+    "exit": "clear",
+    "auto_use": true,
+    "coffee": 2,
+    "smoke": 1
+  },
+  "risk": 0.7
+}

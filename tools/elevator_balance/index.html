@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>无尽电梯 · 数值工作台</title><link rel="stylesheet" href="/style.css"></head>
+<body><header class="top"><div><span class="mark" aria-hidden="true">↕</span><h1>无尽电梯 <span>旧版规则对照</span></h1></div><a href="/">当前首领赛季</a><a href="/report" target="_blank">旧版分析报告 ↗</a></header>
+<main><aside>
+<h2>实验条件</h2>
+<label>地图<select id="map"></select></label><label>参考玩家<select id="preset"></select></label>
+<label class="tick"><input type="checkbox" id="follow" checked> 随地图切换参考玩家</label>
+<div class="twocol"><label>观察楼层<input id="floor" type="number" min="1" max="100" value="8"></label><label>计算到几层<input id="horizon" type="number" min="1" max="100" value="25"></label></div>
+<label>对照方案 B<select id="plan"><option value="proposal">建议 · 胜率校准</option><option value="soft">连续属性软上限</option><option value="same">复制线上规则 A</option><option value="custom" disabled>自定义方案</option></select></label>
+<div class="twocol"><label>抽样次数<input id="samples" type="number" min="50" max="12000" value="800"></label><label>随机种子<input id="seed" type="number" min="0" max="4294967295" value="261123"></label></div>
+<button class="primary" id="run">重新计算</button><p id="status" role="status"></p>
+<div class="actions"><button id="save">保存实验 JSON</button><button id="load">导入实验或方案</button><input type="file" id="file" accept=".json" hidden><button id="patch">导出候选代码 ZIP</button></div>
+<p class="small" id="snapshot"></p>
+</aside>
+<section class="work">
+<nav aria-label="分析页面"><button class="on" data-tab="battle">单场战斗</button><button data-tab="trip">远征收益</button><button data-tab="gear">装备与战力</button><button data-tab="cal">胜率校准</button><button data-tab="rules">地图参数</button></nav>
+<section id="battle" class="tab on"><div class="heading"><div><h2>逐层战斗难度</h2><p id="battle-caption"></p></div><button id="battlecsv">导出曲线</button></div>
+<div class="kpis" id="battle-kpis"></div><div class="chartbox"><canvas id="battleplot"></canvas><div class="legend" id="battle-legend"></div><p class="hover" id="battle-hover"></p></div>
+<div id="battle-detail"></div><details><summary>逐层胜、负、平与回合数</summary><div id="battle-rows" class="scroll"></div></details></section>
+<section id="trip" class="tab"><div class="heading"><div><h2>一张通行证的期望收益</h2><p>独立远征共享随机种子，每到候选楼层就分支结算一次撤离。</p></div><button id="tripcsv">导出结果</button></div>
+<div class="controls" id="policy"></div><button class="primary inline" id="triprun">模拟远征</button>
+<div class="kpis" id="trip-kpis"></div><label>纵轴<select id="tripmetric"><option value="target_exit">到目标层并成功撤离的概率</option><option value="net">每次开局的净变现期望（金）</option><option value="median">净变现中位数（金）</option><option value="death">翻车概率</option><option value="fights">平均交战次数</option></select></label>
+<div class="chartbox"><canvas id="tripplot"></canvas><div class="legend" id="trip-legend"></div><p class="hover" id="trip-hover"></p></div>
+<div id="trip-detail"></div><details><summary>逐层远征结果及误差</summary><div id="trip-rows" class="scroll"></div></details></section>
+<section id="gear" class="tab"><div class="heading"><div><h2>装备与战力</h2><p>同一套配装分别套用 A、B 的底材与品质倍率。战力按标准对手 50% 击杀率反推。</p></div></div>
+<div id="hero-edit"></div><h3>属性的边际收益</h3><div id="marginal"></div>
+<h3>反推装备底材</h3><p>固定本图敌人、品质与其他部位，求当前楼层达到目标击杀率所需的最小底材增量。</p><div id="gearfit" class="fields"></div><button id="gearfitgo">反推数值</button> <button id="gearfitapply" hidden>采用到 B</button><p id="gearfitresult" role="status"></p>
+<details open><summary>编辑 B 的 21 件装备底材与品质倍率</summary><div id="gear-edit"></div></details></section>
+<section id="cal" class="tab"><div class="heading"><div><h2>按目标胜率反推地图</h2><p>以左侧玩家为标尺，分别调整普通怪和精英的强档出现概率。强档可在两个相邻整数面板之间随机取值。</p></div></div>
+<div class="equation">W(f) = W∞ + (W₁ − W∞) · 2<sup>−(f−1)/h</sup></div>
+<div id="cal-edit"></div><button class="primary inline" id="fit">生成并应用到 B</button><div id="cal-result"></div>
+<p class="note">h 表示胜率距最终边界缩短一半所需的层数。边界胜率高于首层时，曲线向上收敛。精确校准针对指定血量、护盾与配装的一次交战，整趟撤离率由远征模拟给出。</p>
+<h3>同一玩家的跨图难度顺序</h3><p>易图胜率减去下一张图的胜率，负值表示两图发生倒挂。两图均采用概率校准且面板适用精确递推时，检查覆盖所有整数楼层。</p><button id="ordercheck">核验四图排序</button><div id="orderresult"></div></section>
+<section id="rules" class="tab"><div class="heading"><div><h2>调整地图参数</h2><p>改动只作用于本地方案 B。可以导出修改后的数值和对应规则代码供审阅。</p></div></div><div id="map-edit"></div></section>
+</section></main><script src="/app.js"></script></body></html>

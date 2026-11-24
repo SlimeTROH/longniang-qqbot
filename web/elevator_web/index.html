@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d100f">
+  <meta name="description" content="无尽电梯网页版。和 QQ 群共用进度，探索禁区、挑战首领、搜集物资并撤离。">
+  <title>无尽电梯 · 搜打撤</title>
+  <link rel="stylesheet" href="/elevator/static/style.css">
+  <link rel="stylesheet" href="/elevator/static/inventory.css">
+  <script src="/elevator/static/inventory.js" defer></script>
+  <script src="/elevator/static/station.js" defer></script>
+  <!-- elevator-rtc -->
+  <script src="/elevator/static/app.js" defer></script>
+</head>
+<body>
+  <a href="#main" class="skip">跳至主要内容</a>
+  <header class="masthead">
+    <div class="mast-inner">
+      <a class="brand" href="/elevator/" aria-label="无尽电梯，返回首页">
+        <span class="elevator-logo" aria-hidden="true"><i></i><i></i></span>
+        <span><strong>无尽电梯</strong><small>搜打撤</small></span>
+      </a>
+      <div id="identity" class="identity" hidden>
+        <button id="sync" class="quiet sync" type="button" aria-label="刷新游戏存档"><span aria-hidden="true">↻</span><span>同步</span></button>
+        <button id="account-button" class="quiet account-button" type="button"><span class="avatar" aria-hidden="true">站</span><span id="player-name">我的账号</span></button>
+      </div>
+    </div>
+  </header>
+  <aside id="maintenance-banner" class="maintenance-banner" role="status" hidden>无尽电梯维护中。当前进度已保存，探险计时暂停，开放后会自动恢复。</aside>
+
+  <main id="main" class="main" tabindex="-1">
+    <div id="loading" class="initial"><span class="indicator"></span> 正在读取会话</div>
+    <section id="gate" class="gate" hidden>
+      <div class="gate-art">
+        <div class="gate-copy">
+          <span class="eyebrow"><i></i> 电梯入口</span>
+          <h1>无尽电梯</h1>
+          <p>探索禁区，收集物资，在下一扇门打开前决定深入还是撤离。</p>
+        </div>
+      </div>
+      <div id="auth-card" class="panel auth-card">
+        <div class="auth-tabs" aria-label="选择登录或注册">
+          <button type="button" id="auth-tab-login" data-auth="login" aria-pressed="true">登录</button>
+          <button type="button" id="auth-tab-register" data-auth="register" aria-pressed="false">创建账号</button>
+        </div>
+        <form id="login-form" class="form-pane" autocomplete="on">
+          <h2>登录无尽电梯</h2>
+          <p>绑定 QQ 后，仓库、装备和当前电梯局会同步到网页。</p>
+          <label>网页账号或已绑定的 QQ 号<input name="username" maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+          <label id="login-type-field" hidden>使用哪种身份登录
+            <select id="login-type" name="login_type" aria-describedby="auth-error" disabled required>
+              <option value="">请选择</option>
+              <option value="account">网页账号</option>
+              <option value="qq">已绑定的 QQ 号</option>
+            </select>
+          </label>
+          <label>密码<input type="password" name="password" maxlength="128" autocomplete="current-password" required></label>
+          <label class="remember-device"><input type="checkbox" name="remember"> 记住此设备，下次自动登录</label>
+          <button type="submit" class="primary wide">进入电梯</button>
+          <button id="forgot-button" type="button" class="quiet help-link">忘记密码</button>
+        </form>
+        <form id="register-form" class="form-pane" autocomplete="on" hidden>
+          <h2>创建网页账号</h2>
+          <p>填好后，用同一个 QQ 号在开放游戏的群里完成绑定。</p>
+          <label>网页账号<input name="username" maxlength="32" minlength="3" autocomplete="username" autocapitalize="none" spellcheck="false" aria-describedby="account-format" required></label>
+          <p id="account-format" class="form-note">3–32 个字符，以字母或数字开头，可用点、下划线或连字符。</p>
+          <label>要绑定的 QQ 号<input name="qq_id" inputmode="numeric" pattern="[1-9][0-9]{4,13}" maxlength="14" autocomplete="off" required></label>
+          <label>新密码<input type="password" name="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+          <button type="submit" class="primary wide">创建并获取群验证密钥</button>
+        </form>
+        <form id="reset-form" class="form-pane" autocomplete="on" hidden>
+          <h2>找回密码</h2>
+          <p>提交新密码后，用该网页账号绑定的 QQ 号在群内确认。</p>
+          <label>网页账号<input name="username" maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+          <label>新密码<input type="password" name="new_password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+          <button type="submit" class="primary wide">获取群验证密钥</button>
+          <button type="button" class="quiet help-link" data-auth="login">返回登录</button>
+        </form>
+        <form id="bind-form" class="form-pane" hidden>
+          <h2>绑定 QQ</h2>
+          <p id="bind-description">使用你要绑定的 QQ 确认网页账号，以领取你的原有存档。</p>
+          <label>要绑定的 QQ 号<input name="qq_id" inputmode="numeric" pattern="[1-9][0-9]{4,13}" maxlength="14" autocomplete="off" required></label>
+          <button type="submit" class="primary wide">重新获取群验证密钥</button>
+          <button id="bind-check" type="button" class="quiet help-link">我已在群里确认</button>
+          <button id="bind-logout" type="button" class="quiet help-link">退出登录</button>
+        </form>
+        <p id="auth-error" class="form-error" role="alert" hidden></p>
+      </div>
+    </section>
+
+    <section id="game" class="game" hidden aria-label="电梯游戏">
+      <nav id="main-nav" class="side-nav" aria-label="游戏界面">
+        <button type="button" data-view="station" aria-current="page" aria-keyshortcuts="1"><b aria-hidden="true">↕</b><span>探索</span><kbd>1</kbd></button>
+        <button type="button" data-view="storage" aria-keyshortcuts="2"><b aria-hidden="true">▤</b><span>仓库</span><kbd>2</kbd></button>
+        <button type="button" data-view="gear" aria-keyshortcuts="3"><b aria-hidden="true">◇</b><span>装备</span><kbd>3</kbd></button>
+        <button type="button" data-view="market" aria-keyshortcuts="4"><b aria-hidden="true">▥</b><span>交易</span><kbd>4</kbd></button>
+        <button type="button" data-view="atlas" aria-keyshortcuts="5"><b aria-hidden="true">◎</b><span>图鉴</span><kbd>5</kbd></button>
+      </nav>
+      <div id="play-area" class="play-area">
+        <div id="resources" class="resources" aria-label="旅客资源"></div>
+        <div id="views">
+          <section id="view-station" class="view" aria-labelledby="station-title">
+            <div id="scene" class="scene">
+              <div class="scene-content">
+                <p id="scene-label" class="eyebrow"><i></i> 地面大厅</p>
+                <h1 id="station-title" tabindex="-1">选择下潜区域</h1>
+                <p id="scene-description">四个区域，越深越危险。</p>
+              </div>
+              <div id="floor-display" class="floor-display" aria-hidden="true"><span>楼层</span><strong>G</strong></div>
+              <div id="station-vitals" class="station-vitals" hidden></div>
+            </div>
+            <div id="station-settlement" class="station-settlements" aria-live="polite" hidden></div>
+            <section id="trip-controls" class="action-deck" aria-label="当前楼层" hidden>
+              <section id="station-pickups" class="panel station-pickups" aria-label="本层拾取" aria-live="polite"></section>
+              <div id="event-panel" class="panel event-panel"></div>
+              <p id="run-notice" class="run-notice" role="status" hidden></p>
+              <div id="run-actions" class="action-grid" aria-label="当前操作"></div>
+              <div id="run-secondary" class="secondary-actions" aria-label="行囊和战况"></div>
+              <div id="run-loadout" class="panel run-loadout" hidden></div>
+            </section>
+            <p id="station-receipt" class="panel station-receipt" role="status" hidden></p>
+            <section id="station-map" class="station-map" aria-label="探索地图"></section>
+            <details class="panel station-tools" id="rush-settings">
+              <summary>连战设置</summary>
+              <form id="rush-form" class="rush-form">
+                <label>每次层数 <select id="rush-floors"><option value="3">3 层</option><option value="5">5 层</option><option value="10">10 层</option></select></label>
+                <label><input id="rush-skip" type="checkbox"> 拾到金红物资时继续</label>
+                <button type="submit" class="quiet">保存设置</button>
+                <small>遇精英或首领会在开战前停下。</small>
+              </form>
+            </details>
+            <details class="panel station-tools">
+              <summary>任务、排行与资料</summary>
+              <div id="station-tools"></div>
+            </details>
+          </section>
+          <section id="view-storage" class="view inner-view" aria-labelledby="storage-title" hidden>
+            <div class="section-heading"><div class="eyebrow"><i></i> 物资</div><h1 id="storage-title" tabindex="-1">仓库</h1></div>
+            <div id="storage-content"></div>
+          </section>
+          <section id="view-gear" class="view inner-view" aria-labelledby="gear-title" hidden>
+            <div class="section-heading"><div class="eyebrow"><i></i> 个人配装</div><h1 id="gear-title" tabindex="-1">装备</h1></div>
+            <div id="gear-content"></div>
+          </section>
+          <section id="view-market" class="view inner-view" aria-labelledby="market-title" hidden>
+            <div class="section-heading"><div class="eyebrow"><i></i> 补给</div><h1 id="market-title" tabindex="-1">交易站</h1></div>
+            <div id="market-content"></div>
+          </section>
+          <section id="view-atlas" class="view inner-view" aria-labelledby="atlas-title" hidden>
+            <div class="section-heading"><div class="eyebrow"><i></i> 永久收藏</div><h1 id="atlas-title" tabindex="-1">图鉴</h1></div>
+            <div id="atlas-content"></div>
+          </section>
+        </div>
+      </div>
+      <aside id="right-column" class="right-column" aria-label="旅客状态和记录">
+        <section class="panel status-panel">
+          <div class="panel-head"><h2 id="status-title">旅客状态</h2><span id="status-tag" class="tag">地面</span>
+            <button id="formula-button" type="button" class="quiet small">查看计算公式</button></div>
+          <div id="status-body" class="status-body"></div>
+        </section>
+        <section class="panel log-panel">
+          <div class="panel-head"><h2>行动记录</h2><button type="button" id="log-button" class="quiet small" hidden>展开</button></div>
+          <ol id="log-list" class="log-list"></ol>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <p id="announce" class="sr-only" role="status" aria-live="polite"></p>
+  <div id="toast" class="toast" role="alert" hidden></div>
+
+  <dialog id="challenge-dialog" class="dialog">
+    <form method="dialog"><button class="close quiet" aria-label="关闭群验证">×</button></form>
+    <div id="challenge-content"></div>
+  </dialog>
+  <dialog id="game-dialog" class="dialog wide-dialog">
+    <form method="dialog"><button class="close quiet" aria-label="关闭窗口">×</button></form>
+    <div id="game-dialog-content"></div>
+  </dialog>
+  <dialog id="account-dialog" class="dialog">
+    <form method="dialog"><button class="close quiet" aria-label="关闭账号设置">×</button></form>
+    <div class="eyebrow"><i></i> 账号设置</div>
+    <h2 id="account-title">网页账号</h2>
+    <p id="account-state"></p>
+    <p id="game-transport" hidden></p>
+    <button type="button" id="nickname-button" class="quiet help-link">修改游戏昵称</button>
+    <form id="change-form" class="form-pane">
+      <h3>修改密码</h3>
+      <label>当前密码<input type="password" name="current_password" maxlength="128" autocomplete="current-password" required></label>
+      <label>新密码<input type="password" name="new_password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+      <button type="submit" class="primary">保存并获取群验证密钥</button>
+    </form>
+    <p id="account-error" class="form-error" role="alert" hidden></p>
+    <button type="button" id="logout" class="quiet help-link">退出登录</button>
+  </dialog>
+</body>
+</html>

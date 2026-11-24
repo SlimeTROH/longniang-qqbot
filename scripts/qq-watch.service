@@ -1,0 +1,17 @@
+[Unit]
+Description=NapCat login notifications
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=qqbot
+WorkingDirectory=/opt/qqbot
+EnvironmentFile=/etc/qq-watch.env
+ExecStart=/opt/qqbot/.venv/bin/python -B /opt/qqbot/qq_watch.py
+Restart=on-failure
+RestartSec=10s
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

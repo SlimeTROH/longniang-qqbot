@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --margin: 36px;
+      --body-width: 728px;
+      --body-height: 1468px;
+    }
+
+    body {
+      margin: 0;
+      color: #182230;
+      background: white;
+      font: 31px/1.58 "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+    }
+
+    #frame {
+      box-sizing: content-box;
+      width: var(--body-width);
+      padding: var(--margin);
+      background: white;
+    }
+
+    #frame.long-answer { --body-height: 3528px; }
+
+    #viewport {
+      width: var(--body-width);
+      height: var(--body-height);
+      overflow: hidden;
+    }
+
+    #content { width: var(--body-width); }
+
+    #content.paginated {
+      height: var(--body-height);
+      column-count: 1;
+      column-fill: auto;
+      column-gap: 0;
+    }
+
+    p {
+      margin: 0 0 0.5em;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+      widows: 2;
+      orphans: 2;
+    }
+
+    .heading {
+      font-weight: 700;
+      margin-bottom: 0.25em;
+      break-after: avoid;
+    }
+
+    .formula {
+      box-sizing: border-box;
+      display: inline-block;
+      padding: 2px 4px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    .equation {
+      margin: 0.15em 0 0.55em;
+      text-align: center;
+      break-inside: avoid;
+    }
+  </style>
+</head>
+<body>
+  <div id="frame"><div id="viewport"><main id="content"></main></div></div>
+
+  <script>
+    const frame = document.getElementById("frame");
+    const content = document.getElementById("content");
+    const viewport = document.getElementById("viewport");
+    const headings = new Set(["题意", "解题思路", "思路", "推导", "具体推导", "结论", "最终答案", "验算"]);
+
+    function renderBold(paragraph) {
+      const markers = [];
+      for (const node of paragraph.childNodes) {
+        if (node.nodeType !== Node.TEXT_NODE) continue;
+        for (const match of node.data.matchAll(/(?<![\\*])\*\*(?!\*)/g)) {
+          markers.push({ node, offset: match.index });
+        }
+      }
+
+      // Work backwards so extracting each span preserves earlier text offsets.
+      for (let index = markers.length - (markers.length % 2) - 2; index >= 0; index -= 2) {
+        const opening = markers[index];
+        const closing = markers[index + 1];
+        const range = document.createRange();
+        range.setStart(opening.node, opening.offset);
+        range.setEnd(closing.node, closing.offset + 2);
+        const selected = range.extractContents();
+        selected.firstChild.deleteData(0, 2);
+        const last = selected.lastChild;
+        last.deleteData(last.length - 2, 2);
+        const bold = document.createElement("strong");
+        bold.append(selected);
+        range.insertNode(bold);
+      }
+    }
+
+    async function layoutSolution(parts) {
+      content.replaceChildren();
+      frame.classList.remove("long-answer");
+      content.classList.remove("paginated");
+      content.style.transform = "";
+      const formulas = [];
+      let paragraph = document.createElement("p");
+
+      function endParagraph() {
+        const first = paragraph.firstChild;
+        const marker = first?.nodeType === Node.TEXT_NODE && /^ {0,3}#{1,6}[ \t]+/.exec(first.data);
+        if (marker) {
+          first.deleteData(0, marker[0].length);
+          const last = paragraph.lastChild;
+          if (last.nodeType === Node.TEXT_NODE) last.data = last.data.replace(/[ \t]+#+[ \t]*$/, "");
+          paragraph.classList.add("heading");
+        }
+        renderBold(paragraph);
+        const text = paragraph.textContent.trim();
+        if (text || paragraph.firstElementChild) {
+          if (!paragraph.firstElementChild && headings.has(text)) paragraph.classList.add("heading");
+          content.append(paragraph);
+        }
+        paragraph = document.createElement("p");
+      }
+
+      for (const part of parts) {
+        if (part.kind === "text") {
+          const lines = part.value.split(/\r\n|\r|\n/);
+          for (let index = 0; index < lines.length; index++) {
+            if (index > 0) endParagraph();
+            paragraph.append(document.createTextNode(lines[index]));
+          }
+          continue;
+        }
+
+        const display = part.kind === "display";
+        const formula = document.createElement("span");
+        formula.className = "formula";
+        katex.render(part.value, formula, {
+          displayMode: display,
+          output: "html",
+          throwOnError: false,
+          trust: false,
+          maxExpand: 1000,
+          maxSize: 24,
+        });
+        formulas.push(formula);
+        if (display) {
+          endParagraph();
+          const block = document.createElement("div");
+          block.className = "equation";
+          block.append(formula);
+          content.append(block);
+        } else {
+          paragraph.append(formula);
+        }
+      }
+      endParagraph();
+      await document.fonts.ready;
+
+      const width = viewport.clientWidth;
+      const height = viewport.clientHeight;
+      for (const formula of formulas) {
+        const scale = Math.min(1, (width - 8) / formula.scrollWidth, (height - 100) / formula.scrollHeight);
+        if (scale < 1) formula.style.zoom = scale;
+      }
+
+      content.classList.add("paginated");
+      if (content.scrollWidth > width) {
+        frame.classList.add("long-answer");
+      }
+      return Math.max(1, Math.ceil(content.scrollWidth / width));
+    }
+
+    function showSolutionPage(index) {
+      content.style.transform = "translateX(" + (-index * viewport.clientWidth) + "px)";
+    }
+  </script>
+</body>
+</html>

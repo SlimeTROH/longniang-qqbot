@@ -1,0 +1,1965 @@
+{
+  "stats": {
+    "hp": 110,
+    "atk": 18,
+    "def": 6,
+    "agi": 10,
+    "luk": 10
+  },
+  "maps": {
+    "mall": {
+      "name": "废弃商场",
+      "multiplier": 1.0,
+      "value_multiplier": 1.0,
+      "rare_rate": 0.02,
+      "extracts": 0,
+      "entry": 0,
+      "ambush_floor": 0,
+      "ambush_rate": 0,
+      "monsters": [
+        "失控扫码车",
+        "摸鱼塑料模特",
+        "打烊巡逻机",
+        "迷路的购物篮",
+        "临期特价广播员",
+        "卡死自动门"
+      ],
+      "elites": [
+        "暴走保安队长",
+        "收银台终末守卫",
+        "自动扶梯大主管",
+        "午夜盘点总监"
+      ]
+    },
+    "subway": {
+      "name": "赛博旧地铁",
+      "multiplier": 1.6,
+      "value_multiplier": 2.2,
+      "rare_rate": 0.045,
+      "extracts": 3,
+      "entry": 0,
+      "ambush_floor": 8,
+      "ambush_rate": 0.2,
+      "monsters": [
+        "误点报站机",
+        "卡帧检票机器人",
+        "轨道巡游无人机",
+        "离线换乘指示牌",
+        "鬼畜安检传送带",
+        "抢座机械臂"
+      ],
+      "elites": [
+        "终点站检票长",
+        "蓝屏守门机",
+        "末班列车调度官",
+        "幽灵特快车长"
+      ]
+    },
+    "abyss": {
+      "name": "深渊实验室",
+      "multiplier": 2.45,
+      "value_multiplier": 4.5,
+      "rare_rate": 0.09,
+      "extracts": 0,
+      "entry": 1000,
+      "ambush_floor": 5,
+      "ambush_rate": 0.3,
+      "guaranteed_equipment": "purple",
+      "monsters": [
+        "异常增殖试管",
+        "循环复读实验体",
+        "过热巡逻仪",
+        "叠加态清洁车",
+        "暴走离心机",
+        "脱逃培养皿"
+      ],
+      "elites": [
+        "熵增门卫",
+        "模因反应堆",
+        "零号实验体",
+        "首席伦理审查官"
+      ]
+    },
+    "auction": {
+      "name": "午夜地下拍卖行",
+      "entry": 2500,
+      "extracts": 6,
+      "multiplier": 3.3,
+      "rare_rate": 0.14,
+      "value_multiplier": 6.5,
+      "ambush_floor": 4,
+      "ambush_rate": 0.35,
+      "monsters": [
+        "礼帽发牌员",
+        "暴走保安雕像",
+        "鉴宝激光眼",
+        "假冒古董青花瓷",
+        "高利贷算盘精",
+        "竞拍举牌机器人"
+      ],
+      "elites": [
+        "首席拍卖槌手",
+        "金库武装管事",
+        "匿名神秘买家",
+        "午夜清算师"
+      ]
+    }
+  },
+  "event_weights": [
+    {
+      "from": 1,
+      "weights": {
+        "loot": 40,
+        "normal": 35,
+        "elite": 5,
+        "choice": 12,
+        "relic": 8
+      }
+    },
+    {
+      "from": 5,
+      "weights": {
+        "loot": 30,
+        "normal": 35,
+        "elite": 15,
+        "choice": 10,
+        "relic": 10
+      }
+    },
+    {
+      "from": 10,
+      "weights": {
+        "loot": 25,
+        "normal": 30,
+        "elite": 25,
+        "choice": 10,
+        "relic": 10
+      }
+    }
+  ],
+  "rarities": {
+    "white": {
+      "name": "白色",
+      "symbol": "⬜",
+      "range": [
+        50,
+        150
+      ],
+      "weight": 42
+    },
+    "green": {
+      "name": "绿色",
+      "symbol": "🟩",
+      "range": [
+        180,
+        420
+      ],
+      "weight": 30
+    },
+    "blue": {
+      "name": "蓝色",
+      "symbol": "🟦",
+      "range": [
+        500,
+        1300
+      ],
+      "weight": 16
+    },
+    "purple": {
+      "name": "紫色",
+      "symbol": "🟪",
+      "range": [
+        1600,
+        3800
+      ],
+      "weight": 8
+    },
+    "gold": {
+      "name": "大金",
+      "symbol": "🟨",
+      "range": [
+        4000,
+        13000
+      ],
+      "weight": 3.3
+    },
+    "red": {
+      "name": "传世红",
+      "symbol": "🟥",
+      "range": [
+        18000,
+        60000
+      ],
+      "weight": 0.7
+    }
+  },
+  "qualities": {
+    "worn": {
+      "prefixes": [
+        "战损版",
+        "9块9包邮的"
+      ],
+      "multiplier": 0.75,
+      "weight": 25
+    },
+    "plain": {
+      "prefixes": [
+        ""
+      ],
+      "multiplier": 1.0,
+      "weight": 50
+    },
+    "mint": {
+      "prefixes": [
+        "九九新的",
+        "未拆封的"
+      ],
+      "multiplier": 1.35,
+      "weight": 18
+    },
+    "signed": {
+      "prefixes": [
+        "电子包浆的",
+        "带神秘签名的"
+      ],
+      "multiplier": 1.8,
+      "weight": 6
+    },
+    "shiny": {
+      "prefixes": [
+        "欧皇附体的"
+      ],
+      "multiplier": 2.5,
+      "weight": 1
+    }
+  },
+  "items": {
+    "tea_half": {
+      "name": "半瓶冰红茶",
+      "kind": "material",
+      "rarity": "white",
+      "map": "mall"
+    },
+    "snack": {
+      "name": "被压扁的电子榨菜",
+      "kind": "material",
+      "rarity": "green",
+      "map": "mall"
+    },
+    "v50": {
+      "name": "疯狂星期四V50代金券",
+      "kind": "material",
+      "rarity": "white",
+      "map": "mall"
+    },
+    "lunch": {
+      "name": "拼好饭满减券",
+      "kind": "material",
+      "rarity": "green",
+      "map": "mall"
+    },
+    "cat_food": {
+      "name": "迷路的哈基米猫条",
+      "kind": "material",
+      "rarity": "white",
+      "map": "mall"
+    },
+    "kneepad": {
+      "name": "脆皮年轻人护膝",
+      "kind": "material",
+      "rarity": "green",
+      "map": "mall"
+    },
+    "sticker": {
+      "name": "已读不回便利贴",
+      "kind": "material",
+      "rarity": "white",
+      "map": "mall"
+    },
+    "qqshow": {
+      "name": "绝版QQ秀截图",
+      "kind": "material",
+      "rarity": "green",
+      "map": "mall"
+    },
+    "key_switch": {
+      "name": "机械键盘青轴",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "mall"
+    },
+    "powerbank": {
+      "name": "高功率充电宝",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "mall"
+    },
+    "screen": {
+      "name": "带鱼屏碎片",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "mall"
+    },
+    "seltzer": {
+      "name": "无糖气泡水原液",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "mall"
+    },
+    "ad_card": {
+      "name": "永久免广告黑卡",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "mall"
+    },
+    "box_set": {
+      "name": "未拆封限量盲盒端盒",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "mall"
+    },
+    "pie": {
+      "name": "实体化老板大饼",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "mall"
+    },
+    "not_found": {
+      "name": "404错误便条",
+      "kind": "material",
+      "rarity": "white",
+      "map": "subway"
+    },
+    "usb": {
+      "name": "祖传代码U盘",
+      "kind": "material",
+      "rarity": "green",
+      "map": "subway"
+    },
+    "antenna": {
+      "name": "卡顿的Wi-Fi天线",
+      "kind": "material",
+      "rarity": "white",
+      "map": "subway"
+    },
+    "goggles": {
+      "name": "防蓝光护目镜",
+      "kind": "material",
+      "rarity": "green",
+      "map": "subway"
+    },
+    "wooden_fish": {
+      "name": "袖珍电子木鱼",
+      "kind": "material",
+      "rarity": "white",
+      "map": "subway"
+    },
+    "merit": {
+      "name": "赛博功德券",
+      "kind": "material",
+      "rarity": "green",
+      "map": "subway"
+    },
+    "pin": {
+      "name": "二次元痛包吧唧",
+      "kind": "material",
+      "rarity": "white",
+      "map": "subway"
+    },
+    "glasses": {
+      "name": "像素风墨镜",
+      "kind": "material",
+      "rarity": "green",
+      "map": "subway"
+    },
+    "fiber": {
+      "name": "满速光纤线",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "subway"
+    },
+    "paste": {
+      "name": "散热硅脂管",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "subway"
+    },
+    "rgb": {
+      "name": "RGB发光灯条",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "subway"
+    },
+    "fan": {
+      "name": "高频显卡风扇",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "subway"
+    },
+    "router": {
+      "name": "零延迟千兆路由器",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "subway"
+    },
+    "chip": {
+      "name": "自动写周报AI芯片",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "subway"
+    },
+    "double_gold": {
+      "name": "十连双金抽卡券",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "subway"
+    },
+    "unknown_soda": {
+      "name": "不明液体快乐水",
+      "kind": "material",
+      "rarity": "white",
+      "map": "abyss"
+    },
+    "repeater": {
+      "name": "会说“啊对对对”的复读机",
+      "kind": "material",
+      "rarity": "green",
+      "map": "abyss"
+    },
+    "slippers": {
+      "name": "反重力人字拖",
+      "kind": "material",
+      "rarity": "white",
+      "map": "abyss"
+    },
+    "de_stress": {
+      "name": "防EMO贴纸",
+      "kind": "material",
+      "rarity": "green",
+      "map": "abyss"
+    },
+    "specimen": {
+      "name": "微缩草履虫标本",
+      "kind": "material",
+      "rarity": "white",
+      "map": "abyss"
+    },
+    "tarot": {
+      "name": "玄学塔罗残页",
+      "kind": "material",
+      "rarity": "green",
+      "map": "abyss"
+    },
+    "void_cable": {
+      "name": "量子缠绕数据线",
+      "kind": "material",
+      "rarity": "white",
+      "map": "abyss"
+    },
+    "tomorrow": {
+      "name": "明天再说纪念章",
+      "kind": "material",
+      "rarity": "green",
+      "map": "abyss"
+    },
+    "slack": {
+      "name": "高纯度摸鱼因子",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "abyss"
+    },
+    "luck": {
+      "name": "欧气浓缩液",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "abyss"
+    },
+    "dopamine": {
+      "name": "稳定多巴胺结晶",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "abyss"
+    },
+    "quantum": {
+      "name": "量子波动耳机",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "abyss"
+    },
+    "wish_coin": {
+      "name": "赛博许愿池硬币",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "abyss"
+    },
+    "reset_button": {
+      "name": "一键重启今天按钮",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "abyss"
+    },
+    "after_work": {
+      "name": "永不加班协议草案",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "abyss"
+    },
+    "g01": {
+      "name": "带薪如厕黄金通行证",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 4500,
+      "set": "天选打工人",
+      "description": "只要在坑位待够二十分钟，快乐就属于自己"
+    },
+    "g02": {
+      "name": "自动回复“好的收到”玉玺",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 4200,
+      "set": "天选打工人",
+      "description": "盖下此章，即刻进入免打扰摸鱼结界"
+    },
+    "g03": {
+      "name": "老板画的纯金大饼",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 5000,
+      "set": "天选打工人",
+      "description": "经过深渊高压浓缩，终于从PPT里变成了真金"
+    },
+    "g04": {
+      "name": "永不降温的枸杞保温杯",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 4800,
+      "set": "天选打工人",
+      "description": "脆皮年轻人的续命法宝，摇一摇能听到养生回响"
+    },
+    "g05": {
+      "name": "全自动连点电子木鱼",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 5200,
+      "set": "赛博功德",
+      "description": "每秒功德+999，敲久了连精英怪都对你慈眉善目"
+    },
+    "g06": {
+      "name": "转发必灵纯金锦鲤",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 5600,
+      "set": "赛博功德",
+      "description": "纯金锻造，摸一下感觉下个宝箱必出红"
+    },
+    "g07": {
+      "name": "赛博月老红线轴",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 4600,
+      "set": "赛博功德",
+      "description": "虽然连上了高速Wi-Fi，但缘分信号偶尔还会转圈"
+    },
+    "g08": {
+      "name": "上线永无Bug镇宅符",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 6000,
+      "set": "赛博功德",
+      "description": "贴在服务器机箱上，据说能镇压一切玄学报错"
+    },
+    "g09": {
+      "name": "黄金哈基米音乐盒",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 5800,
+      "set": "萌宠宇宙",
+      "description": "打开后自动循环洗脑电音，深渊怪物听完原地摇摆"
+    },
+    "g10": {
+      "name": "狗头保命纯金徽章",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 5400,
+      "set": "萌宠宇宙",
+      "description": "说完离谱发言后亮出它，可化解99%的尴尬误会"
+    },
+    "g11": {
+      "name": "尊贵猫主子纯金罐头",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 6200,
+      "set": "萌宠宇宙",
+      "description": "开罐瞬间，方圆三层楼的猫科动物都会投来敬意"
+    },
+    "g12": {
+      "name": "卡皮巴拉情绪稳定球",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 6500,
+      "set": "萌宠宇宙",
+      "description": "不管天塌下来还是翻车了，抱着它都能保持佛系微笑"
+    },
+    "g13": {
+      "name": "未拆封的 RTX 9090 泰坦版",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 8800,
+      "set": "硬核极客",
+      "description": "散热器比砖头还厚，跑得动宇宙模拟也拍得晕怪"
+    },
+    "g14": {
+      "name": "满电诺基亚 3310 传家宝",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 7500,
+      "set": "硬核极客",
+      "description": "历经百年电量仍剩98%，人类文明最后的防线"
+    },
+    "g15": {
+      "name": "永不掉帧的纯金电竞椅",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 8200,
+      "set": "硬核极客",
+      "description": "坐上去操作瞬间丝滑，仿佛自带物理外挂"
+    },
+    "g16": {
+      "name": "绝版全套童年游戏卡带",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 7800,
+      "set": "硬核极客",
+      "description": "吹一吹金手指就能启动，满载整个夏天的回忆"
+    },
+    "g17": {
+      "name": "疯狂星期四永久V50勋章",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 6800,
+      "set": "干饭之魂",
+      "description": "每周四自动散发淡淡炸鸡香气，令人垂涎欲滴"
+    },
+    "g18": {
+      "name": "绝世美味电子榨菜坛",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 6400,
+      "set": "干饭之魂",
+      "description": "没有它，连最香的外卖都仿佛失去了一半灵魂"
+    },
+    "g19": {
+      "name": "冰镇快乐水永恒之杯",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 7000,
+      "set": "干饭之魂",
+      "description": "永远保持3℃和最顶的气泡，第一口直接灵魂升华"
+    },
+    "g20": {
+      "name": "满级厨神黄金泡面盖",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 7200,
+      "set": "干饭之魂",
+      "description": "重量恰到好处，泡出来的面永远是完美的微弹口感"
+    },
+    "g21": {
+      "name": "薛定谔的盲盒猫箱",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 9000,
+      "set": "脑洞深渊",
+      "description": "在撤离结算之前，你永远处于爆金和白给的叠加态"
+    },
+    "g22": {
+      "name": "“退退退”黄金法杖",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 8500,
+      "set": "脑洞深渊",
+      "description": "挥舞起来自带结界气场，专治不请自来的精英怪"
+    },
+    "g23": {
+      "name": "一键撤回社死时光机",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 10500,
+      "set": "脑洞深渊",
+      "description": "专门用来撤回三年前半夜发过的尴尬朋友圈"
+    },
+    "g24": {
+      "name": "反重力防洒奶茶杯",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 9600,
+      "set": "脑洞深渊",
+      "description": "哪怕在电梯里做后空翻，里面的珍珠也不会掉一颗"
+    },
+    "r01": {
+      "name": "非洲之心（闪耀巨钻）",
+      "kind": "collection",
+      "rarity": "red",
+      "value": 25000,
+      "set": "镇馆之宝",
+      "description": "拳头大的完美钻石，整个电梯都被欧气照得亮如白昼"
+    },
+    "r02": {
+      "name": "群主珍藏的绝版机械键盘",
+      "kind": "collection",
+      "rarity": "red",
+      "value": 30000,
+      "set": "镇馆之宝",
+      "description": "建群元老神器，拿到后建议火速塞进安全箱低调撤离"
+    },
+    "r03": {
+      "name": "传国玉玺（扫码防伪版）",
+      "kind": "collection",
+      "rarity": "red",
+      "value": 38000,
+      "set": "镇馆之宝",
+      "description": "受命于天，既寿永昌（底座还贴心地印着防伪溯源码）"
+    },
+    "r04": {
+      "name": "绝对欧皇的十连十金相框",
+      "kind": "collection",
+      "rarity": "red",
+      "value": 42000,
+      "set": "镇馆之宝",
+      "description": "装裱在纯金画框里的奇迹，令全服玩家疯狂吸欧气"
+    },
+    "r05": {
+      "name": "宇宙终极答案“42”水晶碑",
+      "kind": "collection",
+      "rarity": "red",
+      "value": 48000,
+      "set": "镇馆之宝",
+      "description": "通体发光的神秘数字，好像懂了什么又好像什么都没懂"
+    },
+    "r06": {
+      "name": "深渊之心 · 赛博永动机",
+      "kind": "collection",
+      "rarity": "red",
+      "value": 60000,
+      "set": "镇馆之宝",
+      "description": "仅在深渊实验室深处极低概率现世的全服终极梦想",
+      "map": "abyss",
+      "min_floor": 10
+    },
+    "coffee": {
+      "name": "冰美式续命液",
+      "kind": "supply",
+      "rarity": "green",
+      "value": 300,
+      "aliases": [
+        "冰美式",
+        "美式"
+      ],
+      "description": "一口续命，立刻回 40% 最大生命。商店可买，禁区也会掉。"
+    },
+    "ice_tea": {
+      "name": "十倍浓缩冰红茶",
+      "kind": "supply",
+      "rarity": "white",
+      "value": 150,
+      "aliases": [
+        "红茶",
+        "冰红茶"
+      ],
+      "description": "猛灌一口回 25% 最大生命，当前和下层敏捷 +15（15% 概率喝太急打嗝扣 8 血）。"
+    },
+    "smoke": {
+      "name": "“先溜了”烟雾弹",
+      "kind": "supply",
+      "rarity": "blue",
+      "value": 450,
+      "aliases": [
+        "烟雾弹"
+      ],
+      "description": "往地上一摔直接拉烟，无伤摆脱怪物，也能硬过撤离伏击。"
+    },
+    "grenade": {
+      "name": "尊享版脉冲手雷",
+      "kind": "supply",
+      "rarity": "blue",
+      "value": 780,
+      "aliases": [
+        "手雷",
+        "脉冲"
+      ],
+      "description": "见面先糊脸，直接炸掉怪物 30% 当前生命（对精英和 BOSS 同样好使）。"
+    },
+    "lockpick": {
+      "name": "欧皇附体撬锁器",
+      "kind": "supply",
+      "rarity": "blue",
+      "value": 850,
+      "aliases": [
+        "撬锁器",
+        "撬锁"
+      ],
+      "description": "给下一个摸金宝箱上个保底，品质直接抬一档。"
+    },
+    "radar": {
+      "name": "吃瓜热成像雷达",
+      "kind": "supply",
+      "rarity": "blue",
+      "value": 850,
+      "aliases": [
+        "雷达",
+        "热成像"
+      ],
+      "description": "提前扫一眼下一层藏了啥，好决定继续赌还是见好就收。"
+    },
+    "flare": {
+      "name": "“急急急”强效信号弹",
+      "kind": "supply",
+      "rarity": "blue",
+      "value": 500,
+      "aliases": [
+        "信号弹",
+        "急急急"
+      ],
+      "description": "额外再打一发强效信号弹，最多能喊 3 位群友空降补刀。"
+    },
+    "pouch": {
+      "name": "哆啦的临时扩容袋",
+      "kind": "supply",
+      "rarity": "purple",
+      "value": 1900,
+      "aliases": [
+        "扩容袋",
+        "哆啦"
+      ],
+      "description": "本局安全箱临时多塞 1 格，出货太多时的救命口袋。"
+    },
+    "doll": {
+      "name": "“狗头保命”替身娃娃",
+      "kind": "supply",
+      "rarity": "purple",
+      "value": 2800,
+      "aliases": [
+        "娃娃",
+        "狗头保命"
+      ],
+      "description": "揣在背包或安全箱里就行，真要翻车时自动替死，直接连人带包拉回地面。"
+    },
+    "vip_card": {
+      "name": "VIP 金库门禁卡",
+      "kind": "supply",
+      "rarity": "gold",
+      "value": 4600,
+      "aliases": [
+        "门禁卡",
+        "金库卡",
+        "vip卡"
+      ],
+      "description": "刷卡直通下一层隐藏金库，没怪骚扰，痛快连开三个高爆箱。"
+    },
+    "crate_blue": {
+      "name": "蓝色加密黑市盲盒",
+      "kind": "crate",
+      "rarity": "blue",
+      "value": 750,
+      "aliases": [
+        "蓝色盲盒"
+      ],
+      "description": "活着带回大厅后发「解码」开奖，可能出大金、装备或替身娃娃。"
+    },
+    "crate_purple": {
+      "name": "紫色加密黑市盲盒",
+      "kind": "crate",
+      "rarity": "purple",
+      "value": 1850,
+      "aliases": [
+        "紫色盲盒"
+      ],
+      "description": "活着带回大厅后发「解码」开奖，出大金和高阶装备的概率更高。"
+    },
+    "crate_gold": {
+      "name": "金色加密黑市盲盒",
+      "kind": "crate",
+      "rarity": "gold",
+      "value": 4200,
+      "aliases": [
+        "金色盲盒"
+      ],
+      "description": "黑市硬通货！带回大厅发「解码」开奖，有机会直出传世红。"
+    },
+    "gold_shard": {
+      "name": "大金碎片",
+      "kind": "material",
+      "rarity": "blue",
+      "value": 1200,
+      "description": "快递柜里的一块稀有碎片，能变现或作为蓝色材料。"
+    },
+    "reroll_stone": {
+      "name": "装备词条洗练石",
+      "kind": "material",
+      "rarity": "blue",
+      "value": 900,
+      "aliases": [
+        "洗练石"
+      ],
+      "description": "重铸时可代替一件蓝色材料。"
+    },
+    "fake_invoice": {
+      "name": "镀金假发票",
+      "kind": "material",
+      "rarity": "white",
+      "map": "auction"
+    },
+    "used_sticker": {
+      "name": "二手防伪贴纸",
+      "kind": "material",
+      "rarity": "white",
+      "map": "auction"
+    },
+    "fancy_bottle": {
+      "name": "天价矿泉水空瓶",
+      "kind": "material",
+      "rarity": "white",
+      "map": "auction"
+    },
+    "vinyl_master": {
+      "name": "绝版黑胶母带",
+      "kind": "material",
+      "rarity": "green",
+      "map": "auction"
+    },
+    "jade_cabbage": {
+      "name": "翡翠大白菜摆件",
+      "kind": "material",
+      "rarity": "green",
+      "map": "auction"
+    },
+    "bid_paddle": {
+      "name": "神秘拍卖号牌",
+      "kind": "material",
+      "rarity": "green",
+      "map": "auction"
+    },
+    "gold_clip": {
+      "name": "纯金领带夹",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "auction"
+    },
+    "cold_wallet": {
+      "name": "加密离线冷钱包",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "auction"
+    },
+    "secret_catalog": {
+      "name": "绝密藏品图录",
+      "kind": "material",
+      "rarity": "blue",
+      "map": "auction"
+    },
+    "meteor_weight": {
+      "name": "星辰陨铁镇纸",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "auction"
+    },
+    "lafite_cork": {
+      "name": "百年拉菲木塞",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "auction"
+    },
+    "appraiser_lens": {
+      "name": "失传鉴定放大镜",
+      "kind": "material",
+      "rarity": "purple",
+      "map": "auction"
+    },
+    "adrenaline": {
+      "name": "暴走肾上腺素",
+      "kind": "supply",
+      "rarity": "blue",
+      "value": 380,
+      "aliases": [
+        "肾上腺素",
+        "兴奋剂"
+      ],
+      "description": "扎上一针，本局攻击永久 +25%（最多叠 2 层），代价是当场扣 10% 当前血。"
+    },
+    "shield": {
+      "name": "纳米防爆护盾",
+      "kind": "supply",
+      "rarity": "blue",
+      "value": 820,
+      "aliases": [
+        "护盾",
+        "防爆盾",
+        "纳米盾"
+      ],
+      "description": "展开一层 50 点临时护盾，优先替你吸收战斗与奇遇伤害。"
+    },
+    "magnet": {
+      "name": "财神吸金磁铁",
+      "kind": "supply",
+      "rarity": "purple",
+      "value": 2100,
+      "aliases": [
+        "磁铁",
+        "吸金磁铁",
+        "吸金"
+      ],
+      "description": "本局后续新摸到的物资估值额外 +25%，并立刻顺手白摸 1 件当前层宝箱货。"
+    },
+    "warp_card": {
+      "name": "直降电梯卡",
+      "kind": "supply",
+      "rarity": "blue",
+      "value": 920,
+      "aliases": [
+        "电梯卡",
+        "直降卡",
+        "跳层卡"
+      ],
+      "description": "非战斗状态下刷卡直降 2 层跳过中间风险，直冲深层高爆率并顺手侦察下一层。"
+    },
+    "g25": {
+      "name": "蒙娜丽莎比耶真迹",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 9200,
+      "set": "午夜拍卖行",
+      "description": "画里那位微笑着比了个剪刀手，鉴宝专家看了一眼当场辞职。"
+    },
+    "g26": {
+      "name": "绝版初号机纯金手办",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 8800,
+      "set": "午夜拍卖行",
+      "description": "沉得能当防身钝器使，盒说全且连胶带都没发黄。"
+    },
+    "g27": {
+      "name": "永不堵车城市通行徽章",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 8500,
+      "set": "午夜拍卖行",
+      "description": "传说挂在车上就能让早高峰绿灯一路为自己起立鼓掌。"
+    },
+    "g28": {
+      "name": "会讲相声的青铜鼎",
+      "kind": "collection",
+      "rarity": "gold",
+      "value": 9500,
+      "set": "午夜拍卖行",
+      "description": "敲一下报菜名，敲两下抖包袱，博物馆馆长连夜出价收购。"
+    },
+    "r07": {
+      "name": "午夜头牌 · 永不贬值金块",
+      "kind": "collection",
+      "rarity": "red",
+      "value": 36000,
+      "set": "镇馆之宝",
+      "map": "auction",
+      "min_floor": 6,
+      "description": "午夜地下拍卖行压轴拍品，自带抗通胀光环，拿在手里连电梯都微微倾斜。"
+    },
+    "r08": {
+      "name": "群聊热梗编年史 · 铂金典藏版",
+      "kind": "collection",
+      "rarity": "red",
+      "value": 32000,
+      "set": "镇馆之宝",
+      "description": "收录历年跨群抽象神评与名场面，每一页都闪着令人笑出鹅叫的铂金光泽。"
+    }
+  },
+  "equipment": {
+    "crowbar": {
+      "slot": "武器",
+      "name": "物理说服撬棍",
+      "stats": {
+        "atk": 9,
+        "def": 2
+      }
+    },
+    "laser": {
+      "slot": "武器",
+      "name": "高频激光刃",
+      "stats": {
+        "atk": 12,
+        "agi": 5
+      }
+    },
+    "shotgun": {
+      "slot": "武器",
+      "name": "双管霰弹枪",
+      "stats": {
+        "atk": 17,
+        "agi": -4
+      }
+    },
+    "keyboard": {
+      "slot": "武器",
+      "name": "青轴声波键盘",
+      "stats": {
+        "atk": 10,
+        "def": 3
+      }
+    },
+    "pan": {
+      "slot": "武器",
+      "name": "吃鸡黄金平底锅",
+      "stats": {
+        "atk": 8,
+        "luk": 8
+      }
+    },
+    "vest": {
+      "slot": "护甲",
+      "name": "保安大爷反光背心",
+      "stats": {
+        "def": 11,
+        "hp": 12
+      }
+    },
+    "cloak": {
+      "slot": "护甲",
+      "name": "夜行隐身斗篷",
+      "stats": {
+        "def": 4,
+        "agi": 12
+      }
+    },
+    "frame": {
+      "slot": "护甲",
+      "name": "赛博外骨骼",
+      "stats": {
+        "hp": 32,
+        "def": 9,
+        "agi": -2
+      }
+    },
+    "camouflage": {
+      "slot": "护甲",
+      "name": "草丛吉利服",
+      "stats": {
+        "def": 7,
+        "luk": 8
+      }
+    },
+    "coat": {
+      "slot": "护甲",
+      "name": "脆皮护身羽绒服",
+      "stats": {
+        "hp": 25,
+        "def": 7
+      }
+    },
+    "necklace": {
+      "slot": "挂件",
+      "name": "招财哈基米挂坠",
+      "stats": {
+        "luk": 14
+      }
+    },
+    "skates": {
+      "slot": "挂件",
+      "name": "溜得快滑轮鞋",
+      "stats": {
+        "agi": 13
+      }
+    },
+    "belt": {
+      "slot": "挂件",
+      "name": "打工人续命腰包",
+      "stats": {
+        "hp": 30
+      }
+    },
+    "drum": {
+      "slot": "挂件",
+      "name": "便携电子木鱼",
+      "stats": {
+        "atk": 4,
+        "luk": 8
+      }
+    },
+    "binoculars": {
+      "slot": "挂件",
+      "name": "前排吃瓜望远镜",
+      "stats": {
+        "agi": 7,
+        "luk": 7
+      }
+    },
+    "wrench": {
+      "slot": "武器",
+      "name": "工地大扳手",
+      "stats": {
+        "atk": 14,
+        "def": 4,
+        "agi": -2
+      }
+    },
+    "cyber_rod": {
+      "slot": "武器",
+      "name": "赛博钓鱼竿",
+      "stats": {
+        "atk": 10,
+        "agi": 4,
+        "luk": 6
+      }
+    },
+    "delivery_jacket": {
+      "slot": "护甲",
+      "name": "反光外卖冲锋衣",
+      "stats": {
+        "hp": 18,
+        "def": 6,
+        "agi": 9
+      }
+    },
+    "padded_coat": {
+      "slot": "护甲",
+      "name": "防弹大花袄",
+      "stats": {
+        "hp": 42,
+        "def": 10,
+        "agi": -3
+      }
+    },
+    "hairband": {
+      "slot": "挂件",
+      "name": "电子防脱发头箍",
+      "stats": {
+        "def": 6,
+        "luk": 10
+      }
+    },
+    "gold_abacus": {
+      "slot": "挂件",
+      "name": "高利贷黄金算盘",
+      "stats": {
+        "atk": 7,
+        "luk": 9
+      }
+    }
+  },
+  "affixes": {
+    "heavy_strike": {
+      "school": "战神强杀流",
+      "name": "重击",
+      "description": "首回合伤害 +45%。",
+      "power": 0.45
+    },
+    "vampire": {
+      "school": "战神强杀流",
+      "name": "嗜血",
+      "description": "击杀回复 12% 最大生命。",
+      "power": 0.12
+    },
+    "pierce": {
+      "school": "战神强杀流",
+      "name": "破甲",
+      "description": "无视怪物 30% 防御。",
+      "power": 0.3
+    },
+    "last_stand": {
+      "school": "战神强杀流",
+      "name": "不屈",
+      "description": "本局首次致命伤锁 1 HP。",
+      "power": 1
+    },
+    "treasure": {
+      "school": "苟命摸金流",
+      "name": "摸金校尉",
+      "description": "宝箱大金率提高 35%。",
+      "power": 0.35
+    },
+    "slippery": {
+      "school": "苟命摸金流",
+      "name": "滑溜",
+      "description": "逃跑率增加 25 个百分点。",
+      "power": 0.25
+    },
+    "sneak": {
+      "school": "苟命摸金流",
+      "name": "潜行",
+      "description": "普通怪权重的 15% 转为宝箱。",
+      "power": 0.15
+    },
+    "fold": {
+      "school": "苟命摸金流",
+      "name": "空间折叠",
+      "description": "撤离时白绿蓝物资估值 +20%。",
+      "power": 0.2
+    },
+    "vulture": {
+      "school": "秃鹫舔包流",
+      "name": "秃鹫嗅觉",
+      "description": "遗物盒出现权重翻倍。",
+      "power": 1.0
+    },
+    "scavenge": {
+      "school": "秃鹫舔包流",
+      "name": "趁火打劫",
+      "description": "舔包时回复 20% 最大生命。",
+      "power": 0.2
+    },
+    "rescue": {
+      "school": "秃鹫舔包流",
+      "name": "专业捞尸",
+      "description": "捞尸赏金提高到估值的 55%。",
+      "power": 0.55
+    },
+    "veteran": {
+      "school": "撤离与社交流",
+      "name": "电梯老手",
+      "description": "撤离伏击率减半。",
+      "power": 0.5
+    },
+    "loud": {
+      "school": "撤离与社交流",
+      "name": "大嗓门",
+      "description": "发求援时队友支援伤害 +30%。",
+      "power": 0.3
+    },
+    "kindhearted": {
+      "school": "撤离与社交流",
+      "name": "热心肠",
+      "description": "支援盲盒升一档。",
+      "power": 1
+    },
+    "greed": {
+      "school": "赌狗双刃剑",
+      "name": "贪婪诅咒",
+      "description": "战利品估值 +40%，受到伤害 +25%。",
+      "power": 0.4
+    },
+    "wager": {
+      "school": "赌狗双刃剑",
+      "name": "孤注一掷",
+      "description": "低于 30% 生命时攻击与暴击率翻倍。",
+      "power": 0.3
+    },
+    "thorns": {
+      "school": "战神强杀流",
+      "name": "反甲刺猬",
+      "description": "挨打时反弹 30% 所受伤害。",
+      "power": 0.3
+    },
+    "berserk": {
+      "school": "战神强杀流",
+      "name": "越战越勇",
+      "description": "战斗每多打 1 回合攻击递增 +10%。",
+      "power": 0.1
+    },
+    "shield_start": {
+      "school": "苟命摸金流",
+      "name": "出门套盾",
+      "description": "每局开局自带 25 点临时护盾。",
+      "power": 25
+    },
+    "high_roller": {
+      "school": "赌狗双刃剑",
+      "name": "豪赌之眼",
+      "description": "暴击倍率从 1.6 倍升至 2.0 倍。",
+      "power": 2.0
+    }
+  },
+  "sets": {
+    "天选打工人": {
+      "stats": {
+        "luk": 6
+      },
+      "description": "幸运 +6"
+    },
+    "赛博功德": {
+      "event_bonus": 0.1,
+      "description": "奇遇正面几率 +10 个百分点"
+    },
+    "萌宠宇宙": {
+      "stats": {
+        "agi": 5
+      },
+      "description": "敏捷 +5"
+    },
+    "硬核极客": {
+      "stats": {
+        "atk": 6
+      },
+      "description": "攻击 +6"
+    },
+    "干饭之魂": {
+      "stats": {
+        "hp": 20
+      },
+      "description": "最大生命 +20"
+    },
+    "脑洞深渊": {
+      "ticket_cap": 1,
+      "description": "通行证上限 +1"
+    },
+    "镇馆之宝": {
+      "rare_bonus": 0.15,
+      "description": "大金爆率提高 15%"
+    },
+    "午夜拍卖行": {
+      "value_bonus": 0.1,
+      "description": "全地图物资估值永久 +10%"
+    }
+  },
+  "events": [
+    {
+      "id": "vendor",
+      "name": "神秘自动贩卖机",
+      "text": "墙角一台老式贩卖机嗡嗡闪着屏：投 300 金，出啥看脸，概不退换。",
+      "choices": [
+        {
+          "label": "投币",
+          "cost": 300,
+          "loot": 1
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "altar",
+      "name": "血祭祭坛",
+      "text": "暗红灯管下立着座诡异祭台，台面刻着小字：放点血（当前 30% HP），换件保底紫货。",
+      "choices": [
+        {
+          "label": "献血",
+          "hp_current_cost": 0.3,
+          "loot": 1,
+          "min_rarity": "purple"
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "merchant",
+      "name": "黑市走私贩",
+      "text": "阴影里钻出个裹风衣的黑市贩子，压低声音掀开衣襟：熟客价七折，过了这层可没这店。",
+      "offer": true,
+      "choices": [
+        {
+          "label": "交易",
+          "buy_offer": true
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "gas",
+      "name": "毒气密室",
+      "text": "前方半截走廊飘着刺鼻绿雾，里头隐约反着蓝光。身手够快能抢件好货，慢半拍得呛掉 25% 血。",
+      "choices": [
+        {
+          "label": "屏息搜刮",
+          "agi_check": true,
+          "loot": 1,
+          "min_rarity": "blue",
+          "failure_fraction": 0.25
+        },
+        {
+          "label": "绕道"
+        }
+      ]
+    },
+    {
+      "id": "locker",
+      "name": "故障的快递柜",
+      "text": "一排旧快递柜噼里啪啦闪火花，三个格口只有一个藏着大金碎片，摸错得挨 15 点漏电。",
+      "guess": true,
+      "choices": [
+        {
+          "label": "开 1 号格",
+          "guess": 1,
+          "items": [
+            "gold_shard"
+          ],
+          "failure_hp": 15
+        },
+        {
+          "label": "开 2 号格",
+          "guess": 2,
+          "items": [
+            "gold_shard"
+          ],
+          "failure_hp": 15
+        },
+        {
+          "label": "开 3 号格",
+          "guess": 3,
+          "items": [
+            "gold_shard"
+          ],
+          "failure_hp": 15
+        }
+      ]
+    },
+    {
+      "id": "spirit",
+      "name": "热心路人灵魂",
+      "text": "一个半透明的打工人虚影飘在电梯口冲你招手：看着挺累啊，帮你缓口气（回 30% 血），顺便透个下层底。",
+      "choices": [
+        {
+          "label": "接受",
+          "heal": 0.3,
+          "hint": true
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "commute",
+      "name": "临时补给柜",
+      "text": "值班室柜门半开，里头冰着瓶十倍浓缩冰红茶，柜顶还压着一本手绘巡检路线。",
+      "choices": [
+        {
+          "label": "拿红茶",
+          "items": [
+            "ice_tea"
+          ]
+        },
+        {
+          "label": "看路线",
+          "hint": true
+        }
+      ]
+    },
+    {
+      "id": "tea_party",
+      "name": "地下休息区",
+      "text": "难得撞见间没怪打扰的地下茶水间，可以瘫沙发回口血，也能顺手翻翻桌上落灰的杂物。",
+      "choices": [
+        {
+          "label": "休息",
+          "heal": 0.18
+        },
+        {
+          "label": "搜桌子",
+          "loot": 1
+        }
+      ]
+    },
+    {
+      "id": "battery",
+      "name": "反向充电台",
+      "text": "一台改装投币充电台还在冒蓝火花，投 100 金碰碰运气，通上电大概率吐件蓝货以上。",
+      "choices": [
+        {
+          "label": "充电",
+          "cost": 100,
+          "chance": 0.72,
+          "loot": 1,
+          "min_rarity": "blue",
+          "failure_hp": 8
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "chain",
+      "name": "传送带岔路口",
+      "text": "停运的货运传送带卡在岔口，左边是个小轻包，右边鼓鼓囊囊沉得很，抢重包得拼身手。",
+      "choices": [
+        {
+          "label": "轻包",
+          "loot": 1
+        },
+        {
+          "label": "重包",
+          "agi_check": true,
+          "loot": 2,
+          "min_rarity": "green",
+          "failure_hp": 16
+        }
+      ]
+    },
+    {
+      "id": "ceremony",
+      "name": "电子木鱼借用台",
+      "text": "角落摆着台投币电子木鱼，屏幕滚着字：功德 180 金，下个宝箱保底升档，诚心必灵。",
+      "choices": [
+        {
+          "label": "敲木鱼",
+          "cost": 180,
+          "buff_loot": true
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "lost_pouch",
+      "name": "斗篷内侧的小口袋",
+      "text": "漏电铁架上挂着件旧风衣，内袋露出截扩容袋的边角，硬拽下来得挨一下电（15% 当前血）。",
+      "choices": [
+        {
+          "label": "拆包",
+          "hp_current_cost": 0.15,
+          "items": [
+            "pouch"
+          ]
+        },
+        {
+          "label": "绕道"
+        }
+      ]
+    },
+    {
+      "id": "tea_robot",
+      "name": "失眠的咖啡机",
+      "text": "一台加班到发烫的咖啡机正嘟嘟响，投 120 金能现打一杯冰美式，也可以靠边歇会儿回口血。",
+      "choices": [
+        {
+          "label": "等咖啡",
+          "cost": 120,
+          "items": [
+            "coffee"
+          ]
+        },
+        {
+          "label": "休息",
+          "heal": 0.12
+        }
+      ]
+    },
+    {
+      "id": "blinking_terminal",
+      "name": "旧终端调试台",
+      "text": "旧机房终端还剩最后一点电，能先看一眼下层动静，或者直接撬机箱碰运气摸个加密盲盒。",
+      "choices": [
+        {
+          "label": "查终端",
+          "hint": true
+        },
+        {
+          "label": "翻机箱",
+          "chance": 0.6,
+          "items": [
+            "crate_blue"
+          ],
+          "failure_hp": 10
+        }
+      ]
+    },
+    {
+      "id": "parcel",
+      "name": "无人认领的失物袋",
+      "text": "警戒线外掉了个鼓囊囊的失物袋，巡逻机刚好拐过弯，手脚够快能抢件紫货以上回来。",
+      "choices": [
+        {
+          "label": "捡袋子",
+          "agi_check": true,
+          "loot": 1,
+          "min_rarity": "purple",
+          "failure_fraction": 0.2
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "gacha_machine",
+      "name": "十连保底扭蛋机",
+      "text": "走廊拐角立着台五彩斑斓的巨型扭蛋机，屏幕滚着大字：投 600 金保底蓝货，或者试着踹它一脚。",
+      "choices": [
+        {
+          "label": "投币抽扭蛋",
+          "cost": 600,
+          "loot": 1,
+          "min_rarity": "blue"
+        },
+        {
+          "label": "踹它一脚",
+          "agi_check": true,
+          "loot": 1,
+          "min_rarity": "blue",
+          "failure_hp": 16
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "midnight_bbq",
+      "name": "禁区深夜烧烤摊",
+      "text": "应急通道里居然飘着孜然味！戴防毒面具的摊主正在翻烤串：250 金管饱回半血，熟脸也能试着蹭两串。",
+      "choices": [
+        {
+          "label": "花钱撸串",
+          "cost": 250,
+          "heal": 0.55
+        },
+        {
+          "label": "吹牛蹭串",
+          "chance": 0.58,
+          "heal": 0.35,
+          "items": [
+            "ice_tea"
+          ],
+          "failure_hp": 12
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "repair_bench",
+      "name": "野路子强化台",
+      "text": "一张焊满电线的改装工作台还在滋滋冒火星。硬顶着漏电（20% 当前血）能把武器超频，也能直接顺点零件走。",
+      "choices": [
+        {
+          "label": "强行超频",
+          "hp_current_cost": 0.2,
+          "atk_boost": 0.2
+        },
+        {
+          "label": "拆点零件",
+          "loot": 1
+        }
+      ]
+    },
+    {
+      "id": "elevator_shortcut",
+      "name": "高速直降井",
+      "text": "旁边有部没贴封条的货运直梯，按钮上用红笔写着「一口气下两层，直奔深处肥肉」。",
+      "choices": [
+        {
+          "label": "直降两层",
+          "skip_floors": 2
+        },
+        {
+          "label": "稳妥摸角落",
+          "loot": 1
+        }
+      ]
+    },
+    {
+      "id": "cyber_temple",
+      "name": "赛博财神庙",
+      "text": "一块 LED 功德箱供着发光财神像：捐 400 金香火本局大金率暴涨 25%，或者趁没人顺走供果。",
+      "choices": [
+        {
+          "label": "扫码上香",
+          "cost": 400,
+          "rare_boost": 0.25
+        },
+        {
+          "label": "顺走供果",
+          "hp_current_cost": 0.12,
+          "loot": 1,
+          "min_rarity": "blue"
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "mystery_briefcase",
+      "name": "带密码的手提箱",
+      "text": "地上躺着只银色手提箱，三位密码只剩最后一位没试过。猜中直出保底紫货，猜错挨 18 点防盗电击。",
+      "guess": true,
+      "choices": [
+        {
+          "label": "按 1",
+          "guess": 1,
+          "loot": 1,
+          "min_rarity": "purple",
+          "failure_hp": 18
+        },
+        {
+          "label": "按 2",
+          "guess": 2,
+          "loot": 1,
+          "min_rarity": "purple",
+          "failure_hp": 18
+        },
+        {
+          "label": "按 3",
+          "guess": 3,
+          "loot": 1,
+          "min_rarity": "purple",
+          "failure_hp": 18
+        }
+      ]
+    },
+    {
+      "id": "claw_machine",
+      "name": "黑心娃娃机",
+      "text": "角落一台娃娃机里塞满烟雾弹、脉冲手雷甚至护盾，投 300 金抓一次，爪子松紧全看天意（抓空也有安慰货）。",
+      "choices": [
+        {
+          "label": "投币抓一把",
+          "cost": 300,
+          "chance": 0.58,
+          "random_supply": [
+            "smoke",
+            "grenade",
+            "radar",
+            "shield",
+            "adrenaline"
+          ],
+          "failure_loot": 1
+        },
+        {
+          "label": "离开"
+        }
+      ]
+    },
+    {
+      "id": "drone_drop",
+      "name": "迷路的空投无人机",
+      "text": "一架挂着大包裹的送货无人机在天花板打转，身手够快能一把扯下双份物资，手滑会被螺旋桨削掉 20% 血。",
+      "choices": [
+        {
+          "label": "飞身拦截",
+          "agi_check": true,
+          "loot": 2,
+          "failure_fraction": 0.2
+        },
+        {
+          "label": "捡掉落碎件",
+          "loot": 1
+        }
+      ]
+    },
+    {
+      "id": "meme_quiz",
+      "name": "AI 保安核验亭",
+      "text": "小亭子弹出验证码：「请证明你不是摸鱼机器人」。老实配合可领护盾补给，直接拔它电源能趁乱摸件蓝货。",
+      "choices": [
+        {
+          "label": "老实核验",
+          "grant_shield": 30,
+          "hint": true
+        },
+        {
+          "label": "直接拔插头",
+          "chance": 0.72,
+          "loot": 1,
+          "min_rarity": "blue",
+          "failure_hp": 16
+        }
+      ]
+    },
+    {
+      "id": "secret_safe",
+      "name": "半掩的老板保险柜",
+      "text": "墙后露出一只沾满灰的保险柜，门缝里闪着紫蓝微光。暴力撬开得耗 25% 血但连摸两件蓝底好货，也能先歇口气侦察下层。",
+      "choices": [
+        {
+          "label": "暴力强撬",
+          "hp_current_cost": 0.25,
+          "loot": 2,
+          "min_rarity": "blue"
+        },
+        {
+          "label": "歇脚看路线",
+          "heal": 0.18,
+          "hint": true
+        }
+      ]
+    }
+  ],
+  "recipes": [
+    {
+      "output": "grenade",
+      "requires": {
+        "powerbank": 2,
+        "rgb": 1
+      }
+    },
+    {
+      "output": "radar",
+      "requires": {
+        "fiber": 1,
+        "quantum": 1
+      }
+    },
+    {
+      "output": "lockpick",
+      "requires": {
+        "key_switch": 2,
+        "luck": 1
+      }
+    },
+    {
+      "output": "doll",
+      "requires": {
+        "dopamine": 2,
+        "wish_coin": 1
+      }
+    },
+    {
+      "output": "reroll_stone",
+      "requires": {
+        "any_blue": 3
+      }
+    },
+    {
+      "output": "pouch",
+      "requires": {
+        "seltzer": 2,
+        "screen": 1
+      }
+    },
+    {
+      "output": "shield",
+      "requires": {
+        "powerbank": 1,
+        "any_green": 2
+      }
+    },
+    {
+      "output": "warp_card",
+      "requires": {
+        "fiber": 2,
+        "rgb": 1
+      }
+    },
+    {
+      "output": "magnet",
+      "requires": {
+        "cold_wallet": 1,
+        "luck": 1
+      }
+    }
+  ],
+  "shop": {
+    "coffee": 300,
+    "ice_tea": 150,
+    "smoke": 450,
+    "flare": 500,
+    "adrenaline": 380,
+    "ticket": 350,
+    "gear_box": 450,
+    "gear_box_mid": 1500,
+    "gear_box_high": 4800
+  },
+  "safebox_prices": {
+    "2": 6000,
+    "3": 30000,
+    "4": 88000
+  },
+  "reforge_price": 650,
+  "group_buff_price": 20000
+}

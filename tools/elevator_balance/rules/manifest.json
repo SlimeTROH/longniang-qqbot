@@ -1,0 +1,21 @@
+{
+  "captured": "2026-11-23T19:51:17+08:00",
+  "loaded": true,
+  "source_sha256": {
+    "catalog.py": "85eed660da1c2af0a5805bbc68c8bda51bbbb675854c0ee6ba1bc2c628c27d52",
+    "combat.py": "86936a200718399643e1d0ed44ab19bda68ef7a30a4b4089ca42c394c14355de",
+    "content.json": "3f0cb8a449c134ffea97955fac527c769a29dc39439d1126cfaacca27f931331",
+    "game.py": "d3d3c83feab767925d461c10f0ca41f99d7f71adf4f07a33bf99797c8e3f99b4",
+    "storage.py": "ad08c4a5842b7c09bba6fce14c7509c69348af42b199c8510c72b3516c7c708d"
+  },
+  "observed": {
+    "registered": 10,
+    "players_with_runs": 7,
+    "runs": 85,
+    "extracts": 38,
+    "active_real": 0,
+    "active_sim": 0,
+    "season": "2026-11"
+  },
+  "rechecked": "2026-11-23T21:03:25+08:00"
+}
