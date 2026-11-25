@@ -89,7 +89,8 @@ function stationEncounter(run) {
         .map(k => node("span", { text: `${statNames[k]} ${format(enemy[k])}` }))),
       event.boss_rules ? node("p", { className: "item-facts",
         text: `已交锋 ${format(enemy.rounds_fought || 0)} 回合 · 每 ${event.boss_rules.exchange} 回合重击 ×${event.boss_rules.heavy}，随后可用药整备`
-          + (run.simulation ? "" : ` · 红装 ${(event.boss_rules.red_gear_rate * 100).toFixed(2)}%`) }) : null,
+          + (run.simulation ? "" : ` · 红装 ${(event.boss_rules.red_gear_rate * 100).toFixed(2)}% · 闪耀 ${(event.boss_rules.shining_rate * 100).toFixed(2)}%`) }) : enemy.elite ?
+            node("p",{className:"item-facts",text:`精英交锋 ${enemy.rounds_fought || 0}/16 回合 · 第 8 回合可整备`}) : null,
       run.signal ? node("p", { className: "signal-status", text: "等待群友支援" }) : null,
     ].filter(Boolean));
   } else {
@@ -326,9 +327,13 @@ function trialPlan(map) {
   function begin(simulation) {
     const nickname = $("launch-nickname");
     if (nickname && !nickname.reportValidity()) return;
+    const focus = ui.focusDraft || [];
+    if (!simulation && (focus.filter(Boolean).length!==2 || focus[0]===focus[1])) {
+      explain("请选择两套不同的追寻祝福。",true); return;
+    }
     const stock = simulation ? [] : [...quantities.values()].map(item =>
       ({ id: item.id, quantity: Math.min(item.quantity, ui.supplies[item.id] || 0) })).filter(item => item.quantity > 0);
-    const params = { map_id: map.id, ...(stock.length ? { supplies: stock } : {}),
+    const params = { map_id: map.id, ...(!simulation ? {focus} : {}), ...(stock.length ? { supplies: stock } : {}),
       ...(nickname?.value.trim() ? { nickname: nickname.value.trim() } : {}) };
     perform(gameControl(simulation ? "模拟" : "下潜", simulation ? "simulate" : "start", params), { inline: true });
   }
@@ -350,10 +355,33 @@ function trialPlan(map) {
   $("launch-plan").replaceChildren(...[
     !player.name_confirmed ? node("label", { className: "launch-nickname" }, "游戏昵称",
       node("input", { id: "launch-nickname", maxlength: 16, value: (player.nickname || "").slice(0, 16), autocomplete: "off" })) : null,
+    focusPicker(),
     stash.length ? node("details", { className: "launch-supplies" }, node("summary", { text: "选择携带补给" }), node("div", { className: "supply-grid" }, ...stash)) : null,
     node("div", { className: "launch-controls" }, launch, simulate),
     block ? node("p", { className: "empty", text: block }) : null,
   ].filter(Boolean));
+}
+
+function focusPicker(saveNow = false) {
+  const h = ui.state.heirlooms;
+  const selected = ui.focusDraft || h.focus || [];
+  const selects = [0,1].map(i => {
+    const el=node("select",{"aria-label":`第 ${i+1} 套追寻祝福`},
+      node("option",{value:"",text:`选择第 ${i+1} 套`}),
+      ...Object.entries(h.sets).map(([id,s])=>node("option",{value:id,text:s.name})));
+    el.value=selected[i] || "";
+    return el;
+  });
+  function sync() {
+    ui.focusDraft=selects.map(el=>el.value);
+    for (const [i,el] of selects.entries()) {
+      for(const option of el.options) option.disabled=Boolean(option.value && option.value===selects[1-i].value);
+    }
+  }
+  selects.forEach(el=>el.addEventListener("change",sync));
+  sync();
+  return node("div",{className:"heirloom-focus"},node("strong",{text:saveNow?"本局补选追寻":"追寻祝福"}),
+    ...selects,saveNow?button("确认追寻",()=>perform(gameControl("确认追寻","pursue",{focus:ui.focusDraft}),{inline:true})):null);
 }
 
 function renderScene() {
@@ -389,6 +417,7 @@ function renderScene() {
       node("span", { text: `${format(run.value)} 金` }),
     );
     stationPickups(run);
+    if (ui.state.heirlooms.needs_focus) $("station-vitals").append(focusPicker(true));
     stationEncounter(run);
     const choices = run.field_offer ? [] : expeditionChoices(ui.state);
     $("run-actions").replaceChildren(...choices.map((control, index) => {

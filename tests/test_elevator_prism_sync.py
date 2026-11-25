@@ -21,6 +21,7 @@ class PrismAndRush(unittest.TestCase):
         self.cat = self.engine.catalog
         self.now = 1795590000
         self.uid, self.gid = "101","202"
+        self.engine.execute(self.uid,"测试玩家",self.gid,"pursue","1 8",now=self.now)
         self.engine.execute(self.uid,"测试玩家",self.gid,"rename","__keep_lobby__",now=self.now)
         self.enterContext(patch.object(rules.expedition,"enter_field",return_value=""))
 
@@ -40,13 +41,13 @@ class PrismAndRush(unittest.TestCase):
             rules.expedition.apply_archive(stats,perks,{key:7},self.cat)
             run={"stats":stats,"perks":perks,"hp":stats["hp"],"floor":1,"tea_until":0,"field_mods":{}}
             if key=="prism_sun":
-                self.assertEqual(stats["atk"],60)
-                self.assertAlmostEqual(perks["prism_pierce"],.10)
+                self.assertEqual(stats["atk"],52)
+                self.assertAlmostEqual(perks["prism_pierce"],.08)
             if key=="prism_sky":
-                self.assertEqual((stats["hp"],stats["def"]),(130,26))
+                self.assertEqual((stats["hp"],stats["def"]),(120,24))
                 exp = rules.expedition
                 self.assertEqual([exp.ring_shield_limit({**run, "floor": f}) for f in (1,2,3,4,8,120)],
-                                 [40,40,41,41,43,99])
+                                 [40,40,41,41,43,67])
                 run.update(floor=2, shield=40, last_stand=False)
                 exp.refill_ring_shield(run)
                 self.assertEqual((run["shield"], run["ring_shield"]), (80,40))
@@ -64,14 +65,14 @@ class PrismAndRush(unittest.TestCase):
                 rules.combat.hurt(run, 51)
                 self.assertEqual((run["shield"], run["ring_shield"]), (30,0))
             if key=="prism_wind":
-                self.assertEqual(perks["prism_combo"],.22)
+                self.assertEqual(perks["prism_combo"],.14)
                 old=deepcopy(run);old["perks"].pop("prism_flee")
                 self.assertAlmostEqual(rules.combat.flee_rate(run),min(1,rules.combat.flee_rate(old)+.2))
                 run["stats"]["agi"]=100
                 self.assertEqual(rules.combat.flee_rate(run),1)
                 self.assertEqual(rules.combat.flee_rate({**run,"perks":{}}),.9)
             if key=="prism_tide":
-                self.assertEqual((perks["prism_leech"],perks["prism_boss"]),(.2,.3))
+                self.assertEqual((perks["prism_leech"],perks["prism_boss"]),(.14,.20))
         self.assertEqual([rules.expedition.atlas_required(s,48) for s in self.cat.progression["atlas"]],
                          [2,8,16,26,34,40,44,48])
 
@@ -215,7 +216,7 @@ class PrismAndRush(unittest.TestCase):
         state=self.command("start",{"map_id":"mall"})["state"]
         for k,history in state["player"]["stat_sources"].items():
             self.assertEqual(history[-1]["result"],state["run"]["effective_stats"][k])
-        self.assertEqual(state["player"]["stat_sources"]["atk"][-1]["value"],1.5)
+        self.assertEqual(state["player"]["stat_sources"]["atk"][-1]["value"],1.3)
         self.assertIsNone(state["player"]["secondary"]["hit"])
         with self.engine.store.transaction() as db:
             t=rules.Turn(self.engine,db,self.uid,"测试玩家",self.gid,self.now)
@@ -251,10 +252,10 @@ class PrismAndRush(unittest.TestCase):
 
         legacy = {"floor":120, "hp":10, "shield":2803, "perks":{"prism_round_shield":40, "prism_shield_growth":1}}
         self.assertTrue(rules.expedition.repair_legacy_ring_shield(legacy))
-        self.assertEqual((legacy["shield"],legacy["ring_shield"]), (99,99))
+        self.assertEqual((legacy["shield"],legacy["ring_shield"]), (67,67))
         rules.combat.hurt(legacy, 15)
         self.assertFalse(rules.expedition.repair_legacy_ring_shield(legacy))
-        self.assertEqual(legacy["shield"],84)
+        self.assertEqual(legacy["shield"],52)
 
 
 class DeltaTests(unittest.TestCase):

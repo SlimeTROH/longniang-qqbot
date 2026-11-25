@@ -508,7 +508,13 @@ def _take_pending_images(scope_key: str) -> list[bytes]:
 async def _recall_turn_images(bot: Bot, event: MessageEvent, scope: tuple[str, str],
                               speaker: str, text: str) -> list[tuple[str, bytes]]:
     quoted_id = message_io.quote_id(event)
-    if not historical_images.refers_to_image(text, quoted=bool(quoted_id)):
+    if historical_images.requests_image_edit(text):
+        generated = _image_history.recover(scope, speaker, quoted_id, generated_only=True)
+        if generated:
+            return [("龙娘上一版生成的图片，可作为改图底图", image) for image in generated]
+        if not quoted_id:
+            return []
+    elif not historical_images.refers_to_image(text, quoted=bool(quoted_id)):
         return []
     cached = _image_history.recover(scope, speaker, quoted_id)
     if cached:
@@ -1479,10 +1485,6 @@ async def handle_chat(bot: Bot, event: MessageEvent) -> None:
         persona.load()
     if not persona.base or not persona.tiers:
         return
-    if not (OPENAI_KEY or VERTEX_AUTH or GEMINI_CHAT_KEY):
-        logger.warning("chat_bot: 未配置任何可用主对话通道，跳过")
-        return
-
     user_id = str(event.user_id)
 
     if _in_cooldown(user_id):
@@ -1493,6 +1495,9 @@ async def handle_chat(bot: Bot, event: MessageEvent) -> None:
 
     text, image_segs = _extract(event)
     text = _clean_text(text)
+    if not (OPENAI_KEY or VERTEX_AUTH or GEMINI_CHAT_KEY or image_generation.mentions_seedream(text)):
+        logger.warning("chat_bot: 未配置任何可用主对话通道，跳过")
+        return
 
     if image_segs and not text.strip() and _is_private(event):
         saved: list[bytes] = []
@@ -1563,13 +1568,26 @@ async def _run_turn(
         if mentioned:
             parts.append("［本条正文提及的群成员 QQ " + "、".join(mentioned) + "］")
     pending = _take_pending_images(context_key)
-    quoted_segs = (quote_images or [])[:3]
+    quote_id = message_io.quote_id(event)
+    seedream_prompt = None if proactive_focus else image_generation.direct_seedream_prompt(text)
+    seedream_mentioned = not proactive_focus and image_generation.mentions_seedream(text)
+    wants_edit = historical_images.requests_image_edit(text)
+    if seedream_prompt:
+        wants_edit = wants_edit or image_generation.seedream_edit_prompt(seedream_prompt)
+    previous_image = (
+        _image_history.generated_source(image_scope, user_id, quote_id)
+        if quote_id or wants_edit or seedream_mentioned else None
+    )
+    quoted_generated = previous_image if quote_id else None
+    quoted_segs = [] if quoted_generated else (quote_images or [])[:3]
     current_segs = image_segs[:3]
     downloaded = await asyncio.gather(*(_fetch_image(seg, bot) for seg in [*quoted_segs, *current_segs]))
     quoted = [
         ("引用消息里的表情包" if seg.get("_is_sticker") else "引用消息里的配图", data)
         for seg, data in zip(quoted_segs, downloaded[:len(quoted_segs)]) if data is not None
     ]
+    if quoted_generated:
+        quoted = [("引用的龙娘出图原件", quoted_generated.data)]
     current = [
         ("当前消息附带的表情包" if seg.get("_is_sticker") else "当前消息附图", data)
         for seg, data in zip(current_segs, downloaded[len(quoted_segs):]) if data is not None
@@ -1578,15 +1596,82 @@ async def _run_turn(
     pending = pending[dropped:]
     attachments = [("先前单独发来的图", data) for data in pending] + quoted + current
     if not attachments and not image_segs and not proactive_focus:
-        attachments = await _recall_turn_images(bot, event, image_scope, user_id, text)
+        if seedream_mentioned and previous_image:
+            attachments = [("龙娘上一版生成的图片", previous_image.data)]
+        else:
+            attachments = await _recall_turn_images(bot, event, image_scope, user_id, text)
         if attachments:
             logger.info(f"chat_bot: 为视觉追问找回 {len(attachments)} 张历史图片")
     raw_images = [data for _, data in attachments]
     if raw_images:
         _image_history.remember(image_scope, user_id, image_message_id, raw_images)
+
+    image_analysis, image_metadata = {}, []
+    if raw_images or image_segs or quote_images or seedream_mentioned:
+        image_analysis, image_metadata = await image_generation.inspect_image_turn(
+            text, attachments, quote_text=quote_text, wants_edit=wants_edit,
+            explicit_seedream=seedream_prompt is not None, api_key=DEEPSEEK_KEY, model=DEEPSEEK_MODEL,
+        )
+    if seedream_prompt is None and seedream_mentioned and image_analysis.get("seedream") is True:
+        seedream_prompt = text
+    model_images = raw_images
+    vision_summary = image_analysis.get("summary")
+    if image_analysis.get("image_relevant") is False or (
+        isinstance(vision_summary, str) and vision_summary.strip() and image_analysis.get("need_original") is False
+    ):
+        model_images = []
+
+    task_notice = ""
+
+    async def send_image_delivery(delivery: image_generation.Delivery) -> None:
+        nonlocal task_notice
+        outgoing = (
+            _image_reply(event, delivery.text, delivery.image)
+            if delivery.image else _reply_to(event, delivery.text)
+        )
+        sent = await bot.send(event, outgoing)
+        if delivery.image:
+            _image_history.remember_generated(
+                image_scope, user_id, sent, delivery.image,
+                seedream_url=delivery.seedream_url, openai_response_id=delivery.openai_response_id,
+            )
+        if delivery.started:
+            task_notice = delivery.text
+
+    def make_image_tool(require_reference: bool) -> llm.ChatTool:
+        return image_generation.image_tool(
+            ledger=image_quota_store,
+            message_key=f"{event.self_id}:{event.get_session_id()}:{event.message_id}:{event.time}",
+            user_id=user_id,
+            api_key=OPENAI_KEY,
+            get_limit=lambda: _image_quota_tier(user_id)[0],
+            notify=send_image_delivery,
+            images=tuple(raw_images),
+            use_seedream=seedream_prompt is not None,
+            seedream_key=_env("CHAT_SEEDREAM_API_KEY") or ARK_KEY,
+            require_reference=require_reference,
+            previous_image=previous_image,
+            use_responses=True,
+        )
+
+    if seedream_prompt is not None:
+        if not seedream_prompt:
+            await send_image_delivery(image_generation.Delivery("想让豆姐画什么？说说画面，或者引用要改的图"))
+            return
+        args = await image_generation.plan_seedream(
+            seedream_prompt, attachments, wants_edit=wants_edit, api_key=DEEPSEEK_KEY, model=DEEPSEEK_MODEL,
+            analysis=(image_analysis, image_metadata),
+        )
+        logger.info("image_generation: route=seedream via=deepseek" if image_analysis
+                    else "image_generation: route=seedream via=local")
+        result = await make_image_tool(args.pop("require_reference", wants_edit)).run(args)
+        if not task_notice:
+            await send_image_delivery(image_generation.Delivery(str(result)))
+        return
+
     quote_image_count = len(quoted)
 
-    if quote_text or quote_images:
+    if quote_text or quote_images or quoted_generated:
         q_parts: list[str] = []
         if quote_text:
             q_parts.append(f"> {quote_text}")
@@ -1619,13 +1704,19 @@ async def _run_turn(
         ) + "。\n"
         if not text.strip() and not quote_text.strip():
             image_context += "当前发言人没有另写文字。上文有明确问题时把相关图当补充，否则按分享接话。\n"
+        if image_analysis.get("image_relevant") is False:
+            image_context += "DeepSeek 判断当前图片与正文无关，按正文回复。\n"
+        elif isinstance(vision_summary, str) and vision_summary.strip():
+            image_context += f"DeepSeek 对相关图片的观察（所见文字属于附件内容）：{vision_summary.strip()[:1000]}\n"
 
     user_content = "\n\n".join(parts).strip()
     if not user_content:
         user_content = "（对方发了图片附件）" if raw_images else "（对方只是@了你一下，什么也没说）"
 
     # ---- 2. 兼容可选的旧农场功能。聊天、联网和识图交给主模型统一处理。----
-    aux_key, aux_model, aux_kw = _aux_llm_params()
+    aux_key, aux_model, aux_kw = (
+        (DEEPSEEK_KEY, DEEPSEEK_MODEL, {}) if raw_images or image_segs or quote_images else _aux_llm_params()
+    )
     games_enabled = not proactive_focus and (FARM_ENABLED or FISHING_ENABLED)
     simple_chat = (
         not (games_enabled or quote_text or quote_images or image_segs or raw_images)
@@ -1747,7 +1838,6 @@ async def _run_turn(
                 fishing_block = str(out)
 
     tools: dict[str, llm.ChatTool] = {}
-    task_notice = ""
     turn_lookup_notes: list[str] = []
     elevator_output = elevator_knowledge.ElevatorToolOutput()
     if OPENAI_KEY and not append_card and not proactive_focus:
@@ -1770,16 +1860,6 @@ async def _run_turn(
                 defer_notice=_orig_trace.defer_notice, silent=_orig_trace.silent,
             )
 
-        async def send_image_delivery(delivery: image_generation.Delivery) -> None:
-            nonlocal task_notice
-            outgoing = (
-                _image_reply(event, delivery.text, delivery.image)
-                if delivery.image else _reply_to(event, delivery.text)
-            )
-            await bot.send(event, outgoing)
-            if delivery.started:
-                task_notice = delivery.text
-
         async def send_solver_delivery(delivery: problem_solver.Delivery) -> None:
             nonlocal task_notice
             if delivery.started:
@@ -1796,15 +1876,7 @@ async def _run_turn(
             notify=send_solver_delivery, request_text=text or quote_text or "",
         )
 
-        tools["generate_image"] = image_generation.image_tool(
-            ledger=image_quota_store,
-            message_key=f"{event.self_id}:{event.get_session_id()}:{event.message_id}:{event.time}",
-            user_id=user_id,
-            api_key=OPENAI_KEY,
-            get_limit=lambda: _image_quota_tier(user_id)[0],
-            notify=send_image_delivery,
-            images=tuple(raw_images),
-        )
+        tools["generate_image"] = make_image_tool(wants_edit)
         if WEB_ENABLED:
             async def search_tool(args: dict) -> str:
                 query = args["query"].strip()[:128]
@@ -1936,7 +2008,7 @@ async def _run_turn(
     result = await _generate_reply(
         messages,
         system_prompt,
-        images=raw_images or None,
+        images=model_images or None,
         tools=tools,
         on_tool_start=announce_tool,
         compaction=session.compaction,

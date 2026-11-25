@@ -55,6 +55,20 @@ class ImageHistoryTests(unittest.IsolatedAsyncioTestCase):
         old = await recall(Mock(), SimpleNamespace(quoted="unseen-reply"), scope, "234", "再看看图")
         self.assertEqual(old,[("沿引用找回的历史原图",b"found-old-qq-image")])
 
+        original_generation = b"last-generated-result"
+        cache.remember_generated(scope, "234", {"message_id": -14}, original_generation,
+                                 openai_response_id="resp_one")
+        cache.remember(scope, "234", "-15", [b"unrelated-image-sent-later"])
+        recent = SimpleNamespace(quoted=None)
+        self.assertEqual(await recall(Mock(), recent, scope, "234", "继续使用豆姐改图"),
+                         [("龙娘上一版生成的图片，可作为改图底图", original_generation)])
+        self.assertFalse(await recall(Mock(), recent, scope, "999", "继续使用豆姐改图"))
+        self.assertFalse(await recall(Mock(), recent, ("555", "group:11"), "234", "继续改图"))
+        edited = await recall(Mock(), SimpleNamespace(quoted="-14"), scope, "999", "再改一下")
+        self.assertEqual(edited, [("龙娘上一版生成的图片，可作为改图底图", original_generation)])
+        self.assertEqual(cache.generated_source(scope, "234", None).openai_response_id, "resp_one")
+        self.assertEqual(cache.generated_source(scope, "999", "-14").openai_response_id, "")
+
     def test_scope_eviction_expiry_and_no_unrelated_quote_fallback(self):
         now = [0]
         cache = historical_images.ImageHistory(max_bytes=7,max_turns=4,ttl=20,recent_ttl=5,clock=lambda:now[0])

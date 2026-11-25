@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from hashlib import sha256
 from random import Random
 
 RAINBOW_CHANCE = .005
@@ -10,7 +11,13 @@ FIELD_CHANCE = .52
 FIELD_HEAL_WEIGHT = 1.5
 FIELD_EQUIPPED_WEIGHT = .4
 FIELD_WEAR_SLOTS = 2
-ARCHIVE_VERSION = 2
+ARCHIVE_VERSION = 3
+ELITE_INTERVAL = 8
+ELITE_LIMIT = 16
+WISH_CHANCE = .001
+WISH = "field_wish"
+WISH_GUARANTEE_FLOOR = 500
+RESONANCE_CURVE = (1., 1., 1.03, 1.07, 1.12)
 FIELD_TIMED_SLOTS = 3
 JUDGEMENT_DEATH_CHANCE = .5
 BOSS_EXCHANGE_ROUNDS = 4
@@ -156,7 +163,19 @@ def health_limit_note(max_hp: int) -> str:
 
 def ring_shield_limit(run):
     base = run["perks"].get("prism_floor_shield", 0)
-    return base + (run["floor"] - 1) // 2 if base else 0
+    depth = max(0, run["floor"]-1)
+    denominator = 96 + depth
+    return int(base) + (96*depth + denominator)//(2*denominator) if base else 0
+
+
+def migrate_linear_ring(run):
+    if not run.get("ring_shield"):
+        return
+    previous = run["ring_shield"]
+    old_limit = 40 + (max(1,run.get("ring_shield_floor",run["floor"]))-1)//2
+    updated = min(old_limit,previous)*ring_shield_limit(run)//old_limit
+    run["shield"] = max(0,run.get("shield",0)-previous) + updated
+    run["ring_shield"] = updated
 
 
 def refill_ring_shield(run):
@@ -275,8 +294,10 @@ def apply_archive(stats, perks, owned, catalog, *, sources=None):
         add_stats(stats, row["stats"], sources, f"图鉴 {atlas_required(row,len(catalog.collections))} 件")
     rainbow = catalog.progression["rainbow"]
     effects = [rainbow[k] for k in rainbow if k in known]
-    if len(effects) == len(rainbow):
-        effects.append(catalog.progression["resonance"])
+    count = len(effects)
+    if count == len(rainbow):
+        # The permanent stat multiplier is applied last and exactly once below.
+        effects.append({**catalog.progression["resonance"], "percent":{}})
     multipliers = []
     for effect in effects:
         label = effect.get("name","四件虹彩共鸣")
@@ -287,6 +308,9 @@ def apply_archive(stats, perks, owned, catalog, *, sources=None):
             multipliers.append((label,effect["multipliers"]))
     for label, factors in multipliers:
         scale_stats(stats, factors, sources, label+"独立倍率")
+    if count >= 2:
+        scale_stats(stats,{k:RESONANCE_CURVE[count] for k in ("atk","hp","def")},
+                    sources, f"虹彩共鸣 · {count} 种独立倍率")
     for key in ("hp","atk"):
         if stats[key] < 1:
             stats[key] = 1
@@ -295,6 +319,9 @@ def apply_archive(stats, perks, owned, catalog, *, sources=None):
 
 
 def field_description(item):
+    if item.get("wish"):
+        return ("全图新楼层独立 0.1%，每局首次抵达或跨过 F500 保底一件。手动消耗一件，清空背包与安全箱内本局拾取，立即击杀当前敌人（含首领）。"
+                "入场自带物、旧局未标记物资、其他临装和已入库奖励保留；清单为空也可发动。")
     if item.get("judgement"):
         return (
             f"限与本层怪物交战时使用，消耗 1 件 · {JUDGEMENT_DEATH_CHANCE:.0%} 当场阵亡，"
@@ -449,6 +476,26 @@ def refresh(run, collection, *, before=None, note_limit=None):
 
 
 def enter_field(run, items):
+    floor = run["floor"]
+    if floor <= run.get("field_seen", 0) or run.get("field_offer"):
+        return ""
+    guaranteed = WISH in items and floor >= WISH_GUARANTEE_FLOOR and not run.get("wish_guaranteed")
+    seed = f"wish:{run['field_seed']}:{floor}".encode()
+    rolled = int.from_bytes(sha256(seed).digest()[:8], "big") < WISH_CHANCE * (1 << 64)
+    found = WISH in items and (guaranteed or rolled)
+    if found:
+        stash = run.setdefault("field_items", {})
+        stash[WISH] = stash.get(WISH, 0) + 1
+        if guaranteed:
+            run["wish_guaranteed"] = True
+    text = _ordinary_field(run, items)
+    if found:
+        note = "（本局 F500 保底）" if guaranteed else ""
+        return (text + "\n" if text else "") + "✨ 拾到局内道具【为了我所期待的】！" + note
+    return text
+
+
+def _ordinary_field(run, items):
     """Use a distinct deterministic stream; field pickups never draw from the loot RNG."""
     floor=run["floor"]
     if floor<=run.get("field_seen",0) or run.get("field_offer"): return ""
@@ -463,7 +510,7 @@ def enter_field(run, items):
     worn = set(field_slots(run))
     pool, weights = [], []
     for key, item in items.items():
-        if item["map"] not in ("all", run["map"]):
+        if item.get("wish") or item["map"] not in ("all", run["map"]):
             continue
         weight = item["weight"]
         mods = item.get("mods", {})

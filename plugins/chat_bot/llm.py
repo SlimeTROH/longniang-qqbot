@@ -1492,7 +1492,16 @@ async def _call_aux_llm(
             )
         return "", {}, last_err
 
-    # DeepSeek / 传统 Chat Completions 兼容通道
+    return await _call_deepseek(
+        system_prompt, user_content, api_key, model, timeout=timeout,
+        max_output_tokens=max_output_tokens, json_mode=json_mode,
+    )
+
+
+async def _call_deepseek(
+    system_prompt: str, user_content: str | list[dict[str, Any]], api_key: str, model: str,
+    *, timeout: float, max_output_tokens: int, json_mode: bool = True,
+) -> tuple[str, dict[str, Any], str]:
     ds_payload: dict[str, Any] = {
         "model": model or DEEPSEEK_MODEL,
         "messages": [

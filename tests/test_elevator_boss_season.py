@@ -32,6 +32,9 @@ class BossSeason(unittest.TestCase):
 
     def do(self,action,arg=""):
         self.at+=12
+        if action=="start" or (action=="rename" and arg=="__keep_start__"):
+            if not self.g.has_run("1"):
+                self.g.execute("1","玩家","2","pursue","1 8",now=self.at)
         return self.g.execute("1","玩家","2",action,arg,now=self.at)
 
     def turn(self,db):
@@ -102,8 +105,8 @@ class BossSeason(unittest.TestCase):
                         self.assertIn(self.cat.rainbow[keys[0]]["name"], t.warehouse(mode,"").text)
                 self.assertEqual(t.run["hp"],t.run["stats"]["hp"])
                 with self.assertRaises(game.GameError): t._enemy_win(en)
-            self.assertEqual(t.run["perks"]["prism_combo"],.32)
-            self.assertEqual(t.run["perks"]["prism_shield"],45)
+            self.assertAlmostEqual(t.run["perks"]["prism_combo"],.20)
+            self.assertEqual(t.run["perks"]["prism_shield"],30)
             self.assertGreater(t.run["stats"]["atk"],25)
             self.assertFalse(any(it["id"] in self.cat.rainbow for it in t.run["safe"]+t.run["bag"]))
             t.persist()
@@ -112,7 +115,7 @@ class BossSeason(unittest.TestCase):
         self.do("start","mall")
         with self.g.store.read() as db:
             run=json.loads(db.execute("SELECT payload FROM active_runs").fetchone()[0])
-            self.assertEqual(run["perks"]["prism_shield"],45)
+            self.assertEqual(run["perks"]["prism_shield"],30)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM collections WHERE item_id LIKE 'prism_%'").fetchone()[0],4)
             self.assertEqual(db.execute("SELECT quantity FROM inventory WHERE item_id=?", (keys[0],)).fetchone()[0], 2)
 
@@ -189,7 +192,7 @@ class BossSeason(unittest.TestCase):
             pool, weights = rng.choices.call_args.args
             actual = dict(zip(pool, weights))
             self.assertEqual(set(actual), {key for key, item in self.cat.field_items.items()
-                                           if item["map"] in {"all", "abyss"}})
+                                           if item["map"] in {"all", "abyss"} and not item.get("wish")})
             self.assertEqual(actual["field_wrap"], self.cat.field_items["field_wrap"]["weight"] * rules.FIELD_HEAL_WEIGHT)
             self.assertEqual(actual["field_incubator"],
                              self.cat.field_items["field_incubator"]["weight"] * rules.FIELD_HEAL_WEIGHT)
@@ -205,7 +208,7 @@ class BossSeason(unittest.TestCase):
             rng.choices.assert_not_called()
 
     def test_field_rng_map_limits_and_disposal(self):
-        self.assertEqual(len(self.cat.field_items), 61)
+        self.assertEqual(len(self.cat.field_items), 62)
         self.do("rename","__keep_start__")
         with self.g.store.transaction() as db:
             t=self.turn(db)

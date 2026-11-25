@@ -4,7 +4,7 @@ const apiRoot = "/elevator/api";
 const $ = id => document.getElementById(id);
 const navOrder = ["station", "storage", "gear", "market", "atlas"];
 const statNames = { hp: "最大生命", atk: "攻击", def: "防御", agi: "敏捷", luk: "幸运" };
-const rarityNames = { white: "白", green: "绿", blue: "蓝", purple: "紫", gold: "金", red: "红", rainbow: "虹彩" };
+const rarityNames = { white: "白", green: "绿", blue: "蓝", purple: "紫", gold: "金", red: "红", shining:"闪耀", rainbow: "虹彩" };
 const mapSymbols = { mall: "▦", subway: "⊜", abyss: "✦", auction: "◇", tide: "≈", zenith: "✧" };
 const eventNames = { ready: "可以深入", combat: "遭遇敌人", choice: "发现奇遇", relic: "发现遗物" };
 const actionTitles = {
@@ -342,6 +342,7 @@ async function leaveSession(message = "") {
   ui.filter = "";
   ui.search = "";
   ui.selectedMap = "";
+  ui.focusDraft = null;
   ui.supplies = {};
   ui.runPane = "";
   ui.stationNotice = "";
@@ -459,17 +460,51 @@ function basicAttributes(values, sources) {
 function secondaryPanel(stats, run) {
   if (!stats) return null;
   const pct = value => format(Number((value * 100).toFixed(2))) + "%";
-  const rows = [
-    ["命中率", stats.hit == null ? "遇敌后显示" : pct(stats.hit)],
-    ["闪避率", pct(stats.dodge)], ["暴击率", pct(stats.crit)], ["暴击伤害", "×" + format(stats.crit_multiplier)],
-    ["穿透率", pct(stats.pierce)], ["追击率", pct(stats.combo)], ["吸血率", pct(stats.leech)],
-    ["首领增伤", pct(stats.boss_bonus)],
-    ["逃跑率", stats.flee != null ? pct(stats.flee) : stats.enemy ? "不可普通逃跑" : "遇敌后显示"],
-    [run ? "本层星环盾上限" : "首层星环盾上限", format(stats.ring_shield_limit)],
-  ];
-  return node("section", { className: "secondary-stats", "aria-label": "二级战斗属性" },
-    node("h3", { text: "二级战斗属性" }), node("div", { className: "status-pairs" },
-      ...rows.map(([label,value]) => infoPair(label,value))));
+  const labels = {hit:"命中率",dodge:"闪避率",crit:"暴击率",crit_multiplier:"暴击伤害",pierce:"穿透率",combo:"追击率",
+    leech:"吸血率",boss_bonus:"首领增伤",mitigation:"打击减伤",flee:"逃跑率",ring_shield_limit:run?"本层星环盾上限":"首层星环盾上限"};
+  const box=node("section",{className:"secondary-stats","aria-label":"二级战斗属性"},node("h3",{text:"二级战斗属性"}));
+  const grid=node("div",{className:"status-pairs"});
+  const detail=node("div",{className:"stat-source","aria-live":"polite",id:"secondary-source"});
+  const controls=new Map();
+  const display=(key,v)=>v==null?(stats.enemy?"当前不可用":"遇敌后显示"):key==="crit_multiplier"?"×"+format(+v.toFixed(2)):
+    key==="ring_shield_limit"?String(v):pct(v);
+  function show(key) {
+    controls.forEach((b,k)=>b.setAttribute("aria-expanded",String(k===key)));
+    detail.hidden=!key;
+    if(!key) { detail.replaceChildren();return; }
+    const conditions=stats.condition||{}, enemy=stats.enemy;
+    const notes=[];
+    if(key==="hit")notes.push(enemy?"当前敌人 "+enemy:"遇敌后按对方敏捷计算通常命中率。",conditions.full==="B01"?
+      "回描（本场）"+(conditions.state?.redraw?"已使用":"可用"):"");
+    if(key==="crit")notes.push("当前生命 "+conditions.hp+" / "+conditions.max_hp);
+    if(key==="leech")notes.push("常规吸血每回合最多回复最大生命的 10%，并受当前缺血量限制。");
+    if(key==="pierce") {
+      if(conditions.depth_cap)notes.push("本层祝福深层破甲 "+pct(conditions.depth_shred)+"，随楼层增长，最高 "+pct(conditions.depth_cap)+"。");
+      if(enemy && conditions.effective_enemy_def!=null)notes.push("敌方原防御 "+conditions.enemy_def+"，退火裂纹 "+(conditions.state?.cracks||0)+"/2，主攻和追击的实际敌防 "+format(+conditions.effective_enemy_def.toFixed(2)));
+    }
+    if(key==="mitigation")notes.push("常规减伤后计算格挡 "+pct(conditions.guard||0)+"、抢拍减伤、双向伤害 ×"+(conditions.damage_multiplier||1)+"、压舱及护盾。");
+    if(key==="boss_bonus")notes.push(conditions.boss?"当前首领增伤生效":"遇到首领时生效。");
+    if(key==="flee" && stats.flee==null)notes.push(enemy?"当前遭遇或待处理操作限制普通逃跑。":"大厅没有逃跑判定。");
+    if(key==="ring_shield_limit")notes.push("星环剩余 "+(stats.shield_split?.[0]||0)+"，普通盾 "+(stats.shield_split?.[1]||0)+"，总盾 "+(run?.shield||0));
+    const steps=stats.sources?.[key]||[];
+    const list=node("ul",{},...steps.map(step=>node("li",{text:step.name+"　"+(step.before!=null?
+      display(key,step.before)+" → ":"")+(step.after==null?"":display(key,step.after))+(step.change==null?"":"（变化 "+(step.change>0?"+":"")+
+      (key==="crit_multiplier"?step.change.toFixed(2):(100*step.change).toFixed(2)+" 个百分点")+"）")})));
+    detail.replaceChildren(node("strong",{text:labels[key]+" · "+display(key,stats[key])}),list,...notes.filter(Boolean).map(text=>node("p",{text})));
+  }
+  for(const [key,label] of Object.entries(labels)){
+    const b=button("",()=>{ui.secondaryPinned=ui.secondaryPinned===key?"":key;show(ui.secondaryPinned);},"stat-source-button",
+      {"aria-controls":"secondary-source","aria-expanded":"false"});
+    b.append(node("span",{text:label}),node("strong",{text:display(key,stats[key])}));
+    b.addEventListener("pointerenter",e=>{if(e.pointerType==="mouse")show(key);});
+    b.addEventListener("pointerleave",()=>show(ui.secondaryPinned));
+    b.addEventListener("focus",()=>show(key));b.addEventListener("blur",()=>show(ui.secondaryPinned));
+    b.addEventListener("keydown",e=>{if(e.key==="Escape"){ui.secondaryPinned="";show("");}});
+    controls.set(key,b);grid.append(b);
+  }
+  show(ui.secondaryPinned);
+  box.append(grid,detail);
+  return box;
 }
 
 function showFormulas() {
@@ -583,15 +618,18 @@ function showReply(title, reply, rankChoice = null) {
   }
 }
 
-function confirmAction(choice, options, title, text) {
+function confirmAction(choice, options, title, text, confirmLabel="确认", onCancel=null) {
   $("game-dialog-content").replaceChildren(
     node("h2", { text: title }), node("p", { text }),
     node("div", { className: "button-row" },
-      button("确认", () => {
+      button(confirmLabel, () => {
         closeDialog("game-dialog");
         perform(choice, { ...options, confirmed: true });
       }, "primary"),
-      button("取消", () => closeDialog("game-dialog")),
+      button("取消", () => {
+        closeDialog("game-dialog");
+        if(onCancel) onCancel();
+      }),
     ),
   );
   openDialog("game-dialog");
@@ -675,6 +713,16 @@ async function perform(choice, options = {}) {
       if (summary) writeLog(summary);
       if (limitNotices.length) writeLog(limitNotices.join(" · "));
       if (data.state) applyState(data.state, data.sync_token);
+      const wish = data.result?.wish_preview;
+      if (wish) {
+        const label = "确认清空并击杀";
+        const cost=wish.bag||wish.safe ? `清空背包 ${wish.bag} 件、安全箱 ${wish.safe} 件本局拾取（估值 ${format(wish.value)} 金）。` :
+          "背包和安全箱没有本局拾取。";
+        confirmAction(gameControl(label,"wish_confirm",{token:wish.token}), {revision:ui.state.revision},
+          "发动「为了我所期待的」？",
+          `${cost}消耗 1 件临装并立即击杀「${wish.enemy}」。入场补给、其余临装及已入库物品保留。`,label,
+          () => perform(gameControl("取消发动","wish_cancel"),{inline:true,quiet:true}));
+      }
       if (ui.view === "station") {
         if (moved) window.scrollTo(0, 0);
         else if (battle || adventure) {

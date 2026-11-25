@@ -172,3 +172,12 @@
 @media (min-width: 760px) {
   .inv-detail { margin: auto 0 auto auto; width: min(33rem, 90vw); max-height: 100dvh; height: 100%; border-radius: .7rem 0 0 .7rem; }
 }
+.heirloom-focus {display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.6rem 0}
+.heirloom-focus select,.heirloom-piece select {min-height:2.6rem;max-width:100%;padding:.3rem .5rem}
+.heirloom-set {margin:.35rem 0;border-bottom:1px solid var(--line,#45514b);padding:.4rem 0}
+.heirloom-set summary,.heirloom-piece summary {cursor:pointer;min-height:2.2rem;padding:.4rem;line-height:1.4}
+.heirloom-piece,[data-rarity="shining"].pickup-tile {background:linear-gradient(110deg,#f1e8ba,#c1d9e5);color:#283544;border-radius:.45rem}
+.heirloom-piece {padding:.2rem .45rem;margin:.25rem 0}
+.heirloom-piece p {color:#283544}
+.secondary-stats .stat-source-button {min-height:2.8rem;display:flex;flex-direction:column;align-items:flex-start}
+.secondary-stats .stat-source-button[aria-expanded="true"] {outline:1px solid currentColor}

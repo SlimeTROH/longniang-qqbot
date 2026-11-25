@@ -20,6 +20,7 @@ class GameStateTest(unittest.TestCase):
         self.path = Path(folder.name) / "game.sqlite3"
         self.web = WebGame(self.path)
         self.now = AT
+        self.web.game.execute("101","群友甲","110","pursue","1 8",now=AT)
         field_rng = self.enterContext(patch.object(rules.expedition, "Random")).return_value
         field_rng.choices.return_value = ["field_wrap"]
         field_rng.random.return_value = 1.0

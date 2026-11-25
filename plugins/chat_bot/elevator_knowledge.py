@@ -131,6 +131,12 @@ def _combat_rules():
     return import_module(package + ".combat")
 
 
+def _heirloom_rules():
+    from importlib import import_module
+    package = type(_get_live_elevator_game()).__module__.rsplit(".",1)[0]
+    return import_module(package + ".heirlooms")
+
+
 def _render_formulas() -> str:
     groups = _combat_rules().formula_guide()
     return "\n".join("【" + g["title"] + "】\n" + "\n".join(g["lines"]) for g in groups)
@@ -166,6 +172,8 @@ def _run_field_text(run, data):
 _FIELD_TOPICS = ("地图限定道具", "地图限定的道具", "地图专属道具", "地图道具", "局内道具", "临时道具", "临装", "道具特效")
 _FIELD_MODES = {"格挡": "guard", "蓄力": "burst", "限层": "timed", "佩戴": "wear", "一次性": "instant"}
 _FIELD_EFFECTS = {
+    "wish": "「为了我所期待的」全图首次进新层独立 0.1%，本局首次抵达或跨过 F500 保底一件。"
+            "确认后清掉背包和安全箱中的本局拾取并击杀当前活敌。其他临装、入场补给、已入库奖励保留。",
     "agi": "敏捷影响先手、闪避和普通逃跑判定。敏捷相同时玩家先手。",
     "crit": "暴击率加成按百分点直接加到暴击判定。",
     "dodge": "闪避率加成按百分点直接加到闪避判定。",
@@ -330,7 +338,8 @@ def _render_exploration() -> str:
 
 def _render_combat() -> str:
     return (
-        "【战斗与撤退】敏捷高者先手，敏捷相同玩家先手。普通怪、精英和守门怪每次最多打 15 回合，首领每次交锋最多 4 回合，双方保留血量与累计回合数，窗口可用药和换临装。"
+        "【战斗与撤退】敏捷高者先手，敏捷相同玩家先手。普通怪单次 15 回合，精英自然遭遇比旧版少 40%，第 8 回合整备，第 16 回合平手退场。"
+        "首领每 4 回合整备。中场保留血量与累计回合数，可用药、换临装或请求支援。"
         "首领每第 4 回合重击 ×1.26。\n"
         "• 首领和守门怪平手时保留双方生命和进度，下次可继续。普通怪和精英的平手结局是怪物退走，没有战利品。"
         "失败的逃跑先挨一次攻击，活着就立即开战。首领无法普通逃跑。\n"
@@ -744,9 +753,27 @@ def _search_knowledge(data: dict, query: str) -> str:
     if not q:
         return ""
     hits = _matched_gear_parts(data, q)
+    if any(w in q for w in ("祝福","闪耀","追寻","闻岑", "测试破限","破甲")) or re.search(r"\bb0[1-8]",q):
+        rules = _heirloom_rules()
+        hits.append("【闻岑的闪耀祝福】四个独立卡槽，单件少量属性。两件套在二级属性常规结算后破限，四件触发专属机制。"
+                    "整套四件或两套各两件，从 F51 起分别按 60% 或 44% 渐近上限深层破甲，公式为上限×(楼层−50)/(楼层−50+85)。仅玩家主攻和追击生效。"
+                    "正式下潜前发「追寻 1 8」选两套。正式首领每场独立判定闪耀，F8 3%，随楼层增加，最高 10%。"
+                    "成功后两套等概率，套内缺件权重 2、已集得权重 1。发「祝福」查看遗物，发「祝福装配 槽位 编号」装配。")
+        if match := rules.set_key(q):
+            suit = rules.SETS[match]
+            hits.append("\n".join([suit["name"],suit["lore"],suit["two"],suit["four"]]))
+        else:
+            for code,suit in rules.SETS.items():
+                if (code.casefold() in q or suit["name"] in q or any(word in q for word in ("全部","所有","介绍","套装","增强","文案"))):
+                    hits.append(f"{code} {suit['name']}  两件 {suit['two']}  四件 {suit['four']}")
+        for code,item in rules.PIECES.items():
+            if code.casefold() in q or item["name"] in q or item["alias"] in q:
+                hits.append(f"{code} {item['name']} · {rules.SETS[item['set']]['name']}  {item['lore']}")
+    if "为了我所期待的" in q or ("献祭" in q and ("500" in q or "道具" in q)):
+        hits.append(_FIELD_EFFECTS["wish"])
     if "虹彩" in q and ("套" in q or any(slot in q for slot in _GEAR_SLOTS)):
         names = "、".join(item["name"] for item in data["expedition"]["rainbow"].values())
-        hits.append(f"【虹彩共鸣】四件永久背包技能为{names}。集齐四种觉醒共鸣，全套无需装备槽。")
+        hits.append(f"【虹彩共鸣】四件永久技能为{names}。点亮两、三、四种时独立乘攻、生命和防御 ×1.03、×1.07、×1.12，只取当前档；四种额外敏捷 +5、追击 +6 点、开局盾 +30。星环进层盾最多 88。")
     if any(term in q for term in ("计算公式","二级属性","暴击率","命中率","暴击伤害","闪避率","属性来源")):
         hits.append(_render_formulas())
     if any(word in q for word in ("网页", "网站", "绑定qq", "qq绑定", "绑定 qq", "登录", "密码", "记住设备")):

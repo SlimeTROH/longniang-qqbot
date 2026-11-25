@@ -132,6 +132,7 @@ class CollectionCleanup(unittest.TestCase):
     def test_active_run_allows_preview_but_prevents_order_creation(self):
         with self.game.store.transaction() as db:
             self.stock(db, "g01", 300, 2)
+        self.do("pursue", "1 8")
         self.do("start", "mall")
         self.assertTrue(self.game.has_run("1"))
         self.assertEqual(self.plan()["sale_count"], 1)

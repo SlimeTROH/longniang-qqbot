@@ -5,11 +5,14 @@ import re
 
 
 _EMPTY_COMMANDS = frozenset({
-    "down", "fight", "flee", "extract", "rob", "rescue", "leave", "flare", "autoequip", "blessing",
+    "down", "fight", "flee", "extract", "rob", "rescue", "leave", "flare", "autoequip", "blessing", "wish_cancel",
 })
 _PARAMETERS = {
     **dict.fromkeys(_EMPTY_COMMANDS, ()),
-    "start": ("map_id", "supplies", "nickname"),
+    "start": ("map_id", "supplies", "nickname","focus"),
+    "pursue": ("focus",),
+    "equip_blessing": ("slot","piece"),
+    "wish_confirm": ("token",),
     "simulate": ("map_id", "nickname"),
     "rush": ("floors",),
     "rush_settings": ("floors", "skip_valuable", "event_mode", "auto_elite"),
@@ -111,7 +114,21 @@ def _prepare_start(turn, name, params, error):
             # Persist the profile together with the first successful expedition.
             # If the real engine rejects the start, its savepoint leaves both unchanged.
             turn.player.update(nickname=nickname, name_confirmed=1)
-    return name, " | ".join([key, *carry])
+    argument=" | ".join([key, *carry])
+    if name=="start":
+        if "focus" in params:
+            argument+=" ;追寻 "+_focus(params)
+        elif not turn.heirloom_focus:
+            raise error("首次下潜请明确选定两套不同的追寻祝福。")
+    return name, argument
+
+
+def _focus(params):
+    pair=params.get("focus")
+    if (not isinstance(pair,list) or len(pair)!=2 or not all(isinstance(k,str) and re.fullmatch("B0[1-8]",k) for k in pair)
+            or pair[0]==pair[1]):
+        raise ValueError("请选择两套不同的追寻祝福。")
+    return " ".join(pair)
 
 
 def prepare(turn, name: str, params: dict, error) -> tuple[str, str]:
@@ -123,6 +140,19 @@ def prepare(turn, name: str, params: dict, error) -> tuple[str, str]:
         return name, ""
     if name in ("start", "simulate"):
         return _prepare_start(turn, name, params, error)
+    if name=="pursue":
+        return name,_focus(params)
+    if name=="equip_blessing":
+        slot=_count(params,"slot",4)
+        piece=params.get("piece")
+        if piece is not None and (not isinstance(piece,str) or not re.fullmatch("B0[1-8]-[1-4]",piece)):
+            raise ValueError("无效的祝福编号。")
+        if "piece" not in params: raise ValueError("缺少祝福编号。")
+        return name,f"{slot} {piece or '空'}"
+    if name=="wish_confirm":
+        token=params.get("token")
+        if not isinstance(token,str) or not re.fullmatch("[0-9a-f]{16}",token): raise ValueError("请重新预览清单。")
+        return name,token
     if name == "rush":
         return name, str(_count(params, "floors", 10, turn.rush_floors))
     if name == "rush_settings":

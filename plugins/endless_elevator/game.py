@@ -5,6 +5,7 @@ import copy
 import difflib
 import json
 import math
+import secrets
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from hashlib import sha256
 from pathlib import Path
 from random import Random
 
-from . import combat, expedition
+from . import combat, expedition, heirlooms
 from .catalog import Catalog, RARITIES, SLOTS, STAT_NAMES
 from .storage import GameMaintenance, Store, encode
 
@@ -100,11 +101,13 @@ COMMANDS = {
     "black_market": "black_market", "craft": "craft", "decode": "decode", "blessing": "blessing",
     "gallery": "gallery", "rank": "rank", "all_rank": "all_rank", "quests": "quests", "rename": "rename",
     "confirm_order": "confirm_order", "cancel_order": "cancel_order", "orders": "list_orders",
+    "heirlooms": "heirloom_menu", "pursue": "pursue", "equip_blessing":"equip_blessing",
+    "wish_confirm":"wish_confirm", "wish_cancel":"wish_cancel",
     "field": "field_bag", "field_use": "use_field", "field_pick": "pick_field",
     "field_guide": "field_guide", "atlas": "atlas",
 }
 
-OPEN_AI_COMMANDS = frozenset(k for k in COMMANDS if k not in {"confirm_order", "cancel_order"})
+OPEN_AI_COMMANDS = frozenset(k for k in COMMANDS if k not in {"confirm_order", "cancel_order","wish_confirm"})
 _GROUP_ONLY_ACTIONS = frozenset({"flare", "support", "blessing"})
 FIELD_CHOICE_FIRST = frozenset({"down", "rush", "fight", "flee", "extract", "event", "rob", "rescue", "leave", "flare"})
 ORDER_TTL = 600
@@ -520,6 +523,7 @@ class Turn:
             (uid, name),
         )
         self.player = dict(db.execute("SELECT * FROM players WHERE user_id=?", (uid,)).fetchone())
+        self.heirloom_focus, self.heirloom_slots, self.heirloom_owned = heirlooms.load(db,uid)
         pref = db.execute("SELECT floors,skip_valuable,event_mode,auto_elite FROM rush_preferences WHERE user_id=?", (uid,)).fetchone()
         self.rush_floors, self.rush_skip_valuable = (pref[0], bool(pref[1])) if pref else (3, False)
         self.rush_event_mode, self.rush_auto_elite = (pref[2], bool(pref[3])) if pref else ("pause", False)
@@ -539,7 +543,9 @@ class Turn:
         row = db.execute("SELECT * FROM active_runs WHERE user_id=?", (uid,)).fetchone()
         self.run = json.loads(row["payload"]) if row else None
         if self.run:
-            expedition.repair_legacy_ring_shield(self.run)
+            repaired=expedition.repair_legacy_ring_shield(self.run)
+            if not repaired and self.run.get("archive_version",0)<expedition.ARCHIVE_VERSION:
+                expedition.migrate_linear_ring(self.run)
         if self.run is not None and self.run.get("rules_version",1)<2:
             old_max = max(1,self.run["stats"]["hp"])
             self.run["stats"],self.run["perks"] = self._stats()
@@ -701,13 +707,16 @@ class Turn:
         lv = min(25, int(self.player["extracts"]))
         return {"hp": lv * 4, "atk": lv, "def": lv // 2}
 
-    def _stats(self, *, sources=None) -> tuple[dict, dict]:
+    def _worn_rows(self):
         gear=[]
         for slot, equipment_id in json.loads(self.player["loadout"]).items():
             item=self.db.execute("SELECT * FROM equipment WHERE user_id=? AND equip_id=?",(self.uid,equipment_id)).fetchone()
             if item is not None and self.catalog.equipment[item["base_id"]]["slot"]==slot:
                 gear.append(item)
-        return self._gear_panel(gear, sources=sources)
+        return gear
+
+    def _stats(self, *, sources=None) -> tuple[dict, dict]:
+        return self._gear_panel(self._worn_rows(), sources=sources)
 
     def _gear_panel(self, gear, *, sources=None) -> tuple[dict,dict]:
         stats, perks = dict(self.catalog.base), {}
@@ -725,8 +734,40 @@ class Turn:
                 power = self.catalog.affixes[perk]["power"]
                 perks[perk] = max(power, perks.get(perk, 0))
         self.catalog.apply_gear_sets(stats, perks, (row["base_id"] for row in gear if "base_id" in row.keys()),sources=sources)
+        heirlooms.apply(stats,perks,self.heirloom_slots,sources=sources)
         expedition.apply_archive(stats,perks,self.archives,self.catalog,sources=sources)
         return stats, perks
+
+    def secondary_origins(self):
+        origins={}
+        worn=self._worn_rows()
+        affix_groups={}
+        for item in worn:
+            for k in json.loads(item["affixes"]):
+                affix_groups.setdefault(k,[]).append(self.catalog.equipment[item["base_id"]]["name"])
+        for k,items in affix_groups.items():
+            label=f"{self.catalog.affixes[k]['name']}（{'、'.join(items)}，同款取最高）"
+            origins[k]=[(label,self.catalog.affixes[k]["power"])]
+        for k,n in self.catalog.gear_set_counts(row["base_id"] for row in worn).items():
+            suit=self.catalog.gear_sets[k]
+            for threshold,effect in suit["bonuses"].items():
+                if n>=int(threshold):
+                    for stat,value in effect.get("perks",{}).items():
+                        origins.setdefault(stat,[]).append((f"{suit['name']} · {threshold}件",value))
+        rainbow=self.catalog.rainbow
+        effects=[(v["name"],v) for k,v in rainbow.items() if k in self.archives]
+        if len(effects)==len(rainbow):
+            effects.append(("四彩共鸣",self.catalog.progression["resonance"]))
+        for name,effect in effects:
+            for stat,value in effect.get("perks",{}).items():
+                origins.setdefault(stat,[]).append((name,value))
+        if self.run:
+            active=[k for k,end in self.run.get("field_buffs",{}).items() if end>=self.run["floor"]]
+            active.extend(k for k in expedition.field_slots(self.run) if k)
+            for k in active:
+                for stat,value in self.catalog.field_items[k].get("mods",{}).items():
+                    origins.setdefault("field:"+stat,[]).append((self.catalog.field_items[k]["name"],value))
+        return origins
 
     def _init_field(self):
         self.run["rules_version"] = 2
@@ -834,10 +875,93 @@ class Turn:
                 counts[item["id"]] = counts.get(item["id"], 0) + item["quantity"]
         return list(counts.items())
 
+    def _save_heirlooms(self):
+        self.db.execute("""INSERT INTO heirloom_loadouts(user_id,focus,slots) VALUES(?,?,?)
+                           ON CONFLICT(user_id) DO UPDATE SET focus=excluded.focus,slots=excluded.slots""",
+                        (self.uid,encode(self.heirloom_focus),encode(self.heirloom_slots)))
+
+    def _select_focus(self, tokens):
+        pair = [heirlooms.set_key(name) for name in tokens]
+        if len(pair)!=2 or None in pair or pair[0]==pair[1]:
+            raise GameError("从 8 套中选两套不同的祝福，如「追寻 1 8」。")
+        if self.run and (self.run.get("heirloom_focus") or self.run.get("sim")):
+            raise GameError("本局追寻已经锁定，请在下次下潜前调整。")
+        self.heirloom_focus=pair
+        if self.run:
+            self.run["heirloom_focus"]=pair.copy()
+        self._save_heirlooms()
+
+    def pursue(self,text: str,_target: str) -> Reply:
+        tokens=text.replace("，"," ").replace(","," ").split()
+        if tokens==["沿用上次"]:
+            tokens=self.heirloom_focus
+        if len(tokens)==2:
+            self._select_focus(tokens)
+            label="、".join(heirlooms.SETS[k]["name"] for k in self.heirloom_focus)
+            return self.reply("本次追寻已选定："+label, (Choice("电梯大厅","menu"),) if self.run else
+                              (Choice("选择地图","start"),Choice("祝福库","heirlooms")),plain=True,count_cooldown=False)
+        if self.run and self.run.get("heirloom_focus"):
+            return self.heirloom_menu("","")
+        first=heirlooms.set_key(tokens[0]) if len(tokens)==1 else None
+        if tokens and not first:
+            raise GameError("发「追寻 1 8」或从菜单选两套不同祝福。")
+        picks=tuple(Choice(f"{name}（{sum(bool(self.heirloom_owned.get(f'{code}-{i}')) for i in range(1,5))}/4）",
+                           "pursue",f"{first} {code}" if first else code)
+                    for code, name in ((k,v["name"]) for k,v in heirlooms.SETS.items()) if code!=first)
+        return self.reply("请选择第二套追寻祝福。" if first else "正式下潜前先选两套不同的追寻祝福。也可直接发「追寻 1 8」。",
+                          picks,plain=True,multiline_menu=True,count_cooldown=False)
+
+    def heirloom_menu(self,text: str,_target: str) -> Reply:
+        code=heirlooms.set_key(text)
+        piece=heirlooms.piece_key(text)
+        if piece: code=piece[:3]
+        if text.strip() and not code: raise GameError("没有找到这个祝福编号或名称。")
+        if code:
+            spec=heirlooms.SETS[code]
+            lines=[f"✨ {spec['name']} · {spec['short']}",spec["lore"],"两件　"+spec["two"],"四件　"+spec["four"]]
+            choices=[]
+            for key,item in heirlooms.PIECES.items():
+                if item["set"]!=code or (piece and key!=piece): continue
+                a,n=item["stats"]
+                lines.extend([f"{key} {item['name']} · {STAT_NAMES[a]} +{n} · 持有 {self.heirloom_owned.get(key,0)}",item["lore"]])
+                if self.heirloom_owned.get(key) and not self.run:
+                    choices.append(Choice(f"装配 {item['name']}","equip_blessing",key))
+            choices.append(Choice("祝福库","heirlooms"))
+        else:
+            focus=(self.run or {}).get("heirloom_focus",self.heirloom_focus)
+            lines=["✨ 闻岑的闪耀祝福","追寻　"+("、".join(heirlooms.SETS[k]["name"] for k in focus) or "待选两套"),
+                   "卡槽　"+" ｜ ".join(f"{i}. "+(heirlooms.PIECES[k]["name"] if k else "空") for i,k in enumerate(self.heirloom_slots,1))]
+            choices=[Choice(s["name"],"heirlooms",k) for k,s in heirlooms.SETS.items()]
+            if not self.run or not self.run.get("heirloom_focus"): choices.append(Choice("选追寻","pursue"))
+            lines.append("看故事发「祝福 B06」，装卸发「祝福装配 1 B06-1」或「祝福装配 1 空」。")
+        return self.reply("\n".join(lines),tuple(choices),plain=True,as_image=True,forward_title="闻岑的闪耀祝福",count_cooldown=False)
+
+    def equip_blessing(self,text: str,_target: str) -> Reply:
+        self._check_idle()
+        words=text.split(maxsplit=1)
+        if len(words)==1 and (key:=heirlooms.piece_key(words[0])) and self.heirloom_owned.get(key):
+            return self.reply("选一个祝福槽位：",tuple(Choice(f"{i} · "+(heirlooms.PIECES[k]["name"] if k else "空"),
+                              "equip_blessing",f"{i} {key}") for i,k in enumerate(self.heirloom_slots,1)),plain=True,count_cooldown=False)
+        if len(words)!=2 or words[0] not in ("1","2","3","4"):
+            raise GameError("用法：祝福装配 槽位 编号；卸下时编号写「空」。")
+        slot=int(words[0])-1
+        key=heirlooms.piece_key(words[1])
+        if words[1]!="空" and (not key or not self.heirloom_owned.get(key)):
+            raise GameError("祝福库中没有这件遗物。")
+        if key and key in self.heirloom_slots and self.heirloom_slots[slot]!=key:
+            raise GameError("同一件遗物只能装备一份，请先卸下原槽位。")
+        self.heirloom_slots[slot]=key
+        self._save_heirlooms()
+        return self.reply(f"祝福槽 {slot+1}："+(heirlooms.PIECES[key]["name"] if key else "空"),count_cooldown=False)
+
     def start(self, text: str, _target: str) -> Reply:
         if not self.player.get("name_confirmed") and self.player["runs"] == 0 and self.run is None:
             return self._first_time_name_prompt()
         self._check_idle()
+        text, sep, chosen = text.partition(" ;追寻 ")
+        if sep: self._select_focus(chosen.split())
+        if not self.heirloom_focus:
+            return self.pursue("","")
         if not self.player["tickets"]:
             raise GameError("今天的通行证用完了！可以去「商店」加购、等明天零点刷新，或者发「模拟战」免费试玩。")
         normalized = text.replace("｜", "|").strip()
@@ -893,6 +1017,7 @@ class Turn:
         stats, perks = self._stats()
         self.run = {
             "map": key, "floor": 1, "hp": stats["hp"], "stats": stats, "perks": perks,
+            "heirloom_focus": self.heirloom_focus.copy(),
             "bag": items, "safe": [], "safe_extra": 0, "tea_until": 0, "sos_used": False,
             "last_stand": False, "lockpick": False, "peek": "loot" if self.player["runs"] == 1 else "",
             "gold_room": False, "guaranteed_loot": False,
@@ -1168,6 +1293,8 @@ class Turn:
         return result
 
     def _give(self, items: list[dict]) -> str:
+        for item in items:
+            item["run_pickup"]=True
         self.run["bag"].extend(items)
         self._floor_result()["loot"].extend(
             {key: item[key] for key in ("id", "value", "quality", "rarity") if key in item}
@@ -1469,8 +1596,9 @@ class Turn:
                     lines.extend(note.splitlines()[1:])
                     break
                 if enemy["hp"]:
-                    self.last_rush["reason"] = "战斗平手"
-                    lines.append("本场平手，已暂停。")
+                    mid=enemy.get("elite") and enemy.get("rounds_fought")==expedition.ELITE_INTERVAL
+                    self.last_rush["reason"] = "精英中场" if mid else "战斗平手"
+                    lines.append("精英战进入第 8 回合整备窗口。" if mid else "本场平手，已暂停。")
                     break
             elif kind == "choice" and self.rush_event_mode != "pause":
                 if run["hp"]*2 <= run["stats"]["hp"]:
@@ -1523,6 +1651,20 @@ class Turn:
             if self.run["event"].get("enemy") is not enemy or enemy["hp"] or self.run.get("paid_boss_floor")==self.run["floor"]:
                 raise GameError("该首领的胜利已经结算。")
             self.run["paid_boss_floor"] = self.run["floor"]
+            if not self.run.get("sim"):
+                focus=self.run.get("heirloom_focus")
+                if not focus:
+                    raise GameError("本旧局尚未登记追寻池，请先发「追寻 1 8」或在网页选择两套，再挑战首领。")
+                reward=heirlooms.roll(self.run["floor"],focus,self.heirloom_owned,self.rng)
+                if reward:
+                    first=reward not in self.heirloom_owned
+                    self.db.execute("""INSERT INTO heirloom_inventory(user_id,piece,quantity) VALUES(?,?,1)
+                                   ON CONFLICT(user_id,piece) DO UPDATE SET quantity=quantity+1""",(self.uid,reward))
+                    self.heirloom_owned[reward]=self.heirloom_owned.get(reward,0)+1
+                    floor_result["loot"].append({"id":reward,"value":0,"rarity":"shining","banked":True})
+                    piece=heirlooms.PIECES[reward]
+                    lines.append(f"✨【闪耀掉落】{heirlooms.SETS[piece['set']]['name']}·{piece['name']}（"+
+                                 ("首次点亮，已入祝福库，下局整备可装" if first else "重复件，已入祝福库")+"）")
             items = self.catalog.boss_rewards(self.run,self.rng,boss)
             self._first_drop_bonus(items)
             if not self.run.get("sim") and self.rng.random()<expedition.RAINBOW_CHANCE:
@@ -1637,6 +1779,12 @@ class Turn:
             text += "\n" + self._enemy_win(enemy)
         elif enemy.get("boss"):
             text += "\n👑 首领喘着粗气重新架起架势，双方保留剩余血量！赶紧磕药或拍局内道具再来一轮！"
+        elif enemy.get("elite") and enemy.get("rounds_fought",0)<expedition.ELITE_LIMIT:
+            text += f"\n【精英中场】与{enemy['name']}激战满 8 回合，可用药、启用临装或支援。准备就绪后从第 9 回合续战。"
+        elif enemy.get("elite"):
+            self._clear_event()
+            text += f"\n【平手退场】与{enemy['name']}战满 16 回合。留在 F{self.run['floor']}，无击杀奖励。"
+            if enemy["ambush"]: text += "本次撤离未完成。"
         elif enemy["ambush"]:
             text += "\n🚪 守门怪死死卡着电梯门不肯松手，双方保留剩余血量！补口状态再干它！"
         else:
@@ -1662,11 +1810,13 @@ class Turn:
             self._clear_event()
             return self.reply("💨 脚底抹油无伤脱身！还在这一层，趁现在决定走还是留。")
         had_last_stand = bool(self.run["last_stand"])
-        lost = combat.hurt(self.run, combat.damage(enemy["atk"], combat.defence(self.run)),strike=True)
+        effects = []
+        lost = combat.hurt(self.run, combat.damage(enemy["atk"], combat.defence(self.run)),
+                           strike=True,enemy=enemy,log=effects)
         saved = (not had_last_stand) and bool(self.run["last_stand"])
         if not self.run["hp"]:
             return self.reply(f"⚠️ 没跑掉！背后挨了一记狠的（-{lost} HP），直接交代在这儿了……\n" + self.fallen())
-        save_note = "【不屈锁1血！】" if saved else ""
+        save_note = ("【不屈锁1血！】" if saved else "")+"".join(effects)
         return self._fight(enemy, prefix=f"⚠️ 没溜成，回头先挨了一巴掌（-{lost} HP{save_note}），只能硬上了！\n")
 
     def extract(self, _text: str, _target: str) -> Reply:
@@ -1983,6 +2133,8 @@ class Turn:
         key, slot = self._field_target(text)
         if key is None:
             raise GameError("发「局内道具」查看已拾取的名字和使用选项。")
+        if key == expedition.WISH:
+            return self._preview_wish()
         if items[key].get("judgement"):
             return self._use_judgement(key)
         if items[key]["mode"] == "wear" and run.get("field_items", {}).get(key, 0) and slot is None:
@@ -1995,6 +2147,60 @@ class Turn:
         except ValueError as exc:
             raise GameError(str(exc)) from exc
         return self.reply(message)
+
+    def _wish_cost(self):
+        enemy=self._check_enemy()
+        run=self.run
+        if run.get("field_offer"): raise GameError(self._field_offer_text())
+        if enemy["hp"]<=0 or not run.get("field_items",{}).get(expedition.WISH):
+            raise GameError("需持有临装并面对存活的敌人。")
+        if enemy.get("boss") and not run.get("sim") and not run.get("heirloom_focus"):
+            raise GameError("本局需先选定两套追寻祝福。")
+        bag=[i for i in run["bag"] if i.get("run_pickup")]
+        safe=[i for i in run["safe"] if i.get("run_pickup")]
+        fingerprint=sha256(encode([run["field_seed"],run["floor"],enemy,bag,safe]).encode()).hexdigest()
+        return fingerprint, {"enemy":enemy["name"],"bag":len(bag),"safe":len(safe),"value":self._value(bag+safe)}
+
+    def _preview_wish(self) -> Reply:
+        fingerprint,cost=self._wish_cost()
+        pending=self.run.get("wish_pending",{})
+        if pending.get("hash")!=fingerprint:
+            pending={"hash":fingerprint,"token":secrets.token_hex(8)}
+            self.run["wish_pending"]=pending
+        self.last_wish_preview={**cost,"token":pending["token"]}
+        items = (f"清空背包 {cost['bag']} 件、安全箱 {cost['safe']} 件本局拾取，估值 {cost['value']:,} 金。"
+                 if cost["bag"] or cost["safe"] else "背包和安全箱没有本局拾取。")
+        return self.reply(f"确认发动【为了我所期待的】？\n目标　{cost['enemy']}\n{items}"
+                          "消耗 1 件临装并立即击杀目标，之后正常结算奖励。",
+                          (Choice("确认清空并击杀","wish_confirm",pending["token"]),Choice("取消","wish_cancel")),
+                          plain=True,count_cooldown=False)
+
+    def wish_cancel(self,text: str,_target: str) -> Reply:
+        self._check_run().pop("wish_pending",None)
+        return self.reply("已取消发动。",count_cooldown=False)
+
+    def wish_confirm(self,text: str,_target: str) -> Reply:
+        fingerprint,cost=self._wish_cost()
+        pending=self.run.get("wish_pending",{})
+        if not text or pending.get("token")!=text or pending.get("hash")!=fingerprint:
+            reply=self._preview_wish()
+            reply.text="目标或清单已变化，请重新核对。\n"+reply.text
+            return reply
+        run=self.run
+        run.pop("wish_pending")
+        for container in ("bag","safe"):
+            run[container]=[item for item in run[container] if not item.get("run_pickup")]
+        stash=run["field_items"]
+        stash[expedition.WISH]-=1
+        if not stash[expedition.WISH]: del stash[expedition.WISH]
+        enemy=run["event"]["enemy"]
+        report=combat.FightResult(player_start_hp=run["hp"],enemy_start_hp=enemy["hp"],total_dealt=enemy["hp"])
+        enemy["hp"]=0
+        line=(f"【为了我所期待的】已消耗临装 ×1，清空背包 {cost['bag']} 件、安全箱 {cost['safe']} 件本局拾取，"
+              f"估值 {cost['value']:,} 金，立即击杀 {cost['enemy']}。")
+        report.log.append(line)
+        self._record_battle_log(enemy,report)
+        return self.reply(line+"\n【本次击杀奖励】\n"+self._enemy_win(enemy))
 
     def _use_judgement(self, key: str) -> Reply:
         run = self.run
@@ -3824,7 +4030,7 @@ class Turn:
         return self.reply("\n".join(lines),
                           (Choice("下潜", "start"), Choice("模拟战", "simulate"),
                            Choice("仓库", "warehouse"), Choice("商店", "shop"),
-                           Choice("装备", "equipment"), Choice("黑市", "black_market"),
+                           Choice("装备", "equipment"), Choice("闪耀祝福","heirlooms"), Choice("黑市", "black_market"),
                            Choice("陈列室", "gallery"), Choice("悬赏", "quests"),
                            Choice("排行", "rank"), Choice("攻略", "help", "攻略")),
                           plain=False)
@@ -3953,6 +4159,8 @@ class Turn:
         return self.lookup(topic, "")
 
     def lookup(self, text: str, _target: str) -> Reply:
+        if heirlooms.piece_key(text) or heirlooms.set_key(text) and not text.strip().isdigit():
+            return self.heirloom_menu(text,"")
         if not text:
             return self.reply("🔍 想查什么？可以发「查 脉冲手雷」「查 秃鹫嗅觉」「查 装备盲盒」，或直接点分类。",
                               (Choice("游玩攻略", "help", "攻略"), Choice("物品介绍", "help", "道具"),

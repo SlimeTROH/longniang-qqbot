@@ -23,6 +23,7 @@ class RedSeason(unittest.TestCase):
         self.cat = self.engine.catalog
         self.now = 1795520000
         self.uid, self.group = "101","202"
+        self.engine.execute(self.uid,"试验员",self.group,"pursue","1 8",now=self.now)
         self.engine.execute(self.uid,"试验员",self.group,"rename","__keep_lobby__",now=self.now)
 
     def state(self):

@@ -47,6 +47,8 @@ class ElevatorTests(unittest.TestCase):
 
     def command(self, action, text="", *, user="101", group="10", target=""):
         self.at += 12
+        if action=="start" or (action=="rename" and text=="__keep_start__"):
+            self.game.execute(user,f"玩家{user}",group,"pursue","1 8",now=self.at-6)
         if action=="start":
             # Play the onboarding choice before tests that begin directly at a named map.
             with self.game.store.read() as db:
@@ -573,6 +575,7 @@ class PrivateElevatorMenuTests(unittest.IsolatedAsyncioTestCase):
         area = tempfile.TemporaryDirectory()
         self.addCleanup(area.cleanup)
         game = elevator.ElevatorGame(Path(area.name) / "game.sqlite3", rng=Random(17))
+        game.execute("101", "玩家", "321", "pursue", "1 8")
         game.execute("101", "玩家", "321", "rename", "熟悉的乘客")
         with game.store.transaction() as db:
             db.execute("UPDATE players SET runs=1 WHERE user_id='101'")

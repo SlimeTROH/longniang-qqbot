@@ -19,6 +19,8 @@ MAX_PIXELS = 8_294_400
 MAX_EDGE = 3840
 SIZE_STEP = 16
 MAX_GIF_FRAMES = 16
+SEEDREAM_MIN_PIXELS = 921_600
+SEEDREAM_MAX_PIXELS = 4_624_220
 
 
 def _valid_dimensions(width: int, height: int) -> bool:
@@ -74,10 +76,17 @@ class ImageSettings:
     quality: str
     frame_count: int = 1
     frame_duration_ms: int = 200
+    seedream: bool = False
 
     def __post_init__(self) -> None:
         if self.quality not in _QUALITY_RATES:
             raise ValueError("画质应为 low、medium、high、xhigh 或 max")
+        if self.seedream:
+            if self.frame_count != 1:
+                raise ValueError("Seedream 5.5 支持静图。要生成 GIF，请指定 GPT Image。")
+            if not _valid_seedream_size(self.width, self.height):
+                raise ValueError("Seedream 5.5 需要 921,600 到 4,624,220 像素，例如 1024×1024。")
+            return
         if type(self.frame_count) is not int or not 1 <= self.frame_count <= MAX_GIF_FRAMES:
             raise ValueError("静图用 1 帧，GIF 支持 2 到 16 帧。")
         if self.animated and (type(self.frame_duration_ms) is not int or not 20 <= self.frame_duration_ms <= 2000):
@@ -117,23 +126,41 @@ class ImageSettings:
 
     @property
     def output_tokens(self) -> int:
+        if self.seedream:
+            return self.width * self.height // 256
         return (self._output_token_tenths + 5) // 10
 
     @property
     def reservation_tokens(self) -> int:
+        if self.seedream:
+            return self.output_tokens
         # The API can round the billed result up where the calculator rounds down.
         return (self._output_token_tenths + 9) // 10
 
     @property
     def label(self) -> str:
+        if self.seedream:
+            return f"{self.width}×{self.height}"
         label = f"{self.width}×{self.height} · {QUALITY_LABELS[self.quality]}画质"
         return f"{label} · GIF {self.frame_count} 帧" if self.animated else label
+
+
+def _valid_seedream_size(width: int, height: int) -> bool:
+    return (
+        width > 0 and height > 0 and max(width, height) <= 16 * min(width, height)
+        and SEEDREAM_MIN_PIXELS <= width * height <= SEEDREAM_MAX_PIXELS
+    )
 
 
 def fit_image(requested: ImageSettings, remaining: int) -> ImageSettings | None:
     """Keep dimensions when lowering quality suffices, then shrink at the same aspect ratio."""
     if requested.reservation_tokens <= remaining:
         return requested
+    if requested.seedream:
+        for width, height in _smaller_sizes(requested.width, requested.height):
+            if _valid_seedream_size(width, height) and width * height // 256 <= remaining:
+                return replace(requested, width=width, height=height)
+        return None
     requested_rank = QUALITY_LEVELS.index(requested.quality)
     for quality in reversed(QUALITY_LEVELS[:requested_rank]):
         candidate = replace(requested, quality=quality)

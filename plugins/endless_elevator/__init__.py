@@ -16,7 +16,7 @@ from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, Message
 from nonebot.rule import Rule
 from nonebot.typing import T_State
 
-from . import expedition
+from . import expedition, heirlooms
 from .cards import close_renderer, prewarm_text_cards, render_card, render_text_card
 from .game import RUN_TIMEOUT, Choice, ElevatorGame, Reply
 from .storage import GameMaintenance, MAINTENANCE_MESSAGE
@@ -63,6 +63,8 @@ _ACTIONS = {
     "改名": "rename", "修改昵称": "rename", "设置昵称": "rename", "电梯改名": "rename", "游戏昵称": "rename", "昵称": "rename",
     "排行": "rank", "全服排行": "all_rank", "榜单": "rank", "探索榜": "rank", "全服探索榜": "all_rank",
     "金雨祈福": "blessing",
+    "祝福":"heirlooms", "祝福库":"heirlooms", "闪耀祝福":"heirlooms", "追寻":"pursue",
+    "沿用上次":"pursue", "祝福装配":"equip_blessing", "确认清空并击杀":"wish_confirm",
     "悬赏": "quests", "每日悬赏": "quests", "每日任务": "quests", "电梯任务": "quests", "任务": "quests",
     "帮助": "help", "查": "lookup",
     "攻略": "help", "电梯攻略": "help", "搜打撤攻略": "help", "新手攻略": "help", "玩法攻略": "help",
@@ -90,6 +92,7 @@ _EVENT_WORDS = {
     option["label"] for event in game.catalog.events.values() for option in event["choices"]
 }
 _DEFAULT_ARGUMENTS = {
+    "沿用上次":"沿用上次",
     "带药下潜": "推荐 | 带药",
     "探索榜": "深度", "全服探索榜": "深度",
     "扩容安全箱": "扩容", "补票": "补票", "买药": "买药", "一键买药": "买药",
@@ -287,6 +290,8 @@ def _known_lookup(name: str) -> bool:
     query = name.casefold()
     if not query:
         return False
+    if heirlooms.piece_key(query) or heirlooms.set_key(query):
+        return True
     if any(query in alias.casefold() for alias in ("通行证", "车票", "新手装备箱", "进阶装备箱", "尊享装备箱", "尊享金装匣", "绿箱", "蓝箱", "金箱", "金装匣", "装备盲盒", "装备箱", "安全箱", "安全箱扩容", "扩容")):
         return True
     return any(

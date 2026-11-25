@@ -29,7 +29,7 @@ expedition = rules.expedition
 ACTIVE_READS = frozenset({"battle_log", "bag", "field_guide", "atlas", "rank", "all_rank",
                          "help", "lookup", "quests", "gallery", "shop", "warehouse",
                          "black_market", "equipment"})
-ACTIONS = ACTIVE_READS | {
+ACTIONS = ACTIVE_READS | {"pursue","equip_blessing","heirlooms","wish_confirm","wish_cancel",
     "menu", "start", "simulate", "down", "rush", "rush_settings", "fight", "flee", "extract", "save_box",
     "swap_box", "use", "event", "rob", "rescue", "leave", "flare", "support", "buy", "sell",
     "wear", "autoequip", "reroll", "craft", "decode", "blessing", "rename", "field", "field_use", "field_pick",
@@ -103,7 +103,7 @@ def _revision(turn, records, key: bytes) -> str:
     # Fingerprint actual persisted payload: legacy runs hydrate field seeds on read.
     snapshot = [turn.gid, turn.day, turn.player, list(row) if row else None, stock,
                 [entry.item for entry in gear], turn.archives, group, turn.rush_floors, turn.rush_skip_valuable,
-                turn.rush_event_mode, turn.rush_auto_elite]
+                turn.rush_event_mode, turn.rush_auto_elite,turn.heirloom_focus,turn.heirloom_slots,turn.heirloom_owned]
     data = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hmac.digest(key, data.encode("utf-8"), "sha256").hex()
 
@@ -269,7 +269,8 @@ def _run(turn, last_action, own_signal) -> dict:
         }
         if (rank := pending["enemy"].get("boss")):
             event["boss_rules"] = {"exchange":expedition.BOSS_EXCHANGE_ROUNDS, "heavy":expedition.BOSS_HEAVY,
-                                   "red_gear_rate":expedition.boss_red_gear_rate(rank,cat.maps[run["map"]]["multiplier"])}
+                                   "red_gear_rate":expedition.boss_red_gear_rate(rank,cat.maps[run["map"]]["multiplier"]),
+                                   "shining_rate":rules.heirlooms.probability(run["floor"])}
     elif kind == "choice":
         spec = cat.events[pending["id"]]
         event.update(name=spec["name"], text=spec["text"], choices=[
@@ -463,9 +464,14 @@ def _snapshot(turn, records, revision: str) -> dict:
             "rush_event_mode": turn.rush_event_mode, "rush_auto_elite": turn.rush_auto_elite,
             "loadout": json.loads(p["loadout"]), "stats": stats, "stat_sources":sources,
             "secondary":rules.combat.secondary_stats(sheet, in_run=bool(run),
-                                                    escape_blocked=bool(own_signal or sheet.get("field_offer"))),
+                                                    escape_blocked=bool(own_signal or sheet.get("field_offer")),
+                                                    details=True,origins=turn.secondary_origins()),
         },
         "formulas": rules.combat.formula_guide(),
+        "heirlooms":{"sets":rules.heirlooms.SETS,"pieces":rules.heirlooms.PIECES,
+                     "owned":turn.heirloom_owned,"slots":turn.heirloom_slots,
+                     "focus":(turn.run or {}).get("heirloom_focus",turn.heirloom_focus),
+                     "needs_focus":bool(turn.run and not turn.run.get("sim") and not turn.run.get("heirloom_focus"))},
         "run": run, "maps": maps, "actions": moves, "controls": _expedition_controls(turn, run), "warehouse": warehouse,
         "supplies": [i for i in warehouse if i["kind"] == "supply"],
         "equipment": _equipment(turn, gear), "shop": _shop(turn), "market": _market(turn),
@@ -615,6 +621,7 @@ def _command_result(command, state, turn, old_floor, old_hp, old_gold) -> dict:
         "pickups": pickups, "hp_delta": run["hp"] - old_hp if run and old_hp is not None else None,
         "gold_delta": state["player"]["gold"] - old_gold, "outcome": outcome, "summary": summary,
         "limit_notices": turn.limit_notices,
+        "wish_preview":getattr(turn,"last_wish_preview",None),
         "radar_scan": scan,
         "rush": {"reason":rush["reason"], "floors":[
             {"floor":row["floor"], "title":row["title"], "loot":_earned_loot(turn.catalog,row["loot"]),

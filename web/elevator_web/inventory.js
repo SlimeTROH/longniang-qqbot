@@ -1,7 +1,7 @@
 "use strict";
 
 window.ElevatorInventory = (() => {
-  const order = ["rainbow", "red", "gold", "purple", "blue", "green", "white", "field"];
+  const order = ["rainbow", "shining", "red", "gold", "purple", "blue", "green", "white", "field"];
   const ranks = new Map(order.map((grade, index) => [grade, index]));
   const healingItems = new Set(["coffee", "ice_tea"]);
   const usableActions = new Set(["use", "field_use"]);
@@ -486,6 +486,45 @@ window.ElevatorInventory = (() => {
     );
   }
 
+  function heirloomCabinet(ctx, atlas) {
+    const {node,button,state}=ctx, h=state.heirlooms;
+    if (!h) return null;
+    const equipped = h.slots.filter(Boolean);
+    const body=node("section",{className:"inv-list heirloom-cabinet"},
+      node("h2",{text:atlas?"闻岑的八套遗物":"闪耀祝福 · 四槽"}));
+    if (!atlas) {
+      body.append(node("div",{className:"inv-card-grid inv-equipment-slots"}, ...h.slots.map((key,i)=>{
+        const label=`槽 ${i+1} · ${key?h.pieces[key].name:"空"}`;
+        if(!key || state.run) return node("div",{className:"inv-empty-slot",text:label});
+        return button(label+" · 卸下",()=>ctx.execute(control("卸下祝福","equip_blessing",{slot:i+1,piece:null}),{inline:true}),"inv-utility");
+      })));
+    }
+    for (const [code,suit] of Object.entries(h.sets)) {
+      const parts=Object.entries(h.pieces).filter(([,p])=>p.set===code);
+      const worn=equipped.filter(key=>h.pieces[key].set===code).length;
+      const owned=parts.filter(([key])=>h.owned[key]).length;
+      const details=node("details",{className:"heirloom-set"},
+        node("summary",{text:`${suit.name} · 收藏 ${owned}/4 · 装配 ${worn}/4`}),
+        node("p",{text:suit.short}), node("p",{text:suit.lore}),
+        node("p",{text:`两件${worn>=2?"（生效）":""}　${suit.two}`}),node("p",{text:`四件${worn===4?"（生效）":""}　${suit.four}`}));
+      for(const [key,p] of parts) {
+        const line=node("details",{className:"heirloom-piece","data-grade":"shining"},
+          node("summary",{text:`${key}　${p.name} · ${ctx.statNames[p.stats[0]]} +${p.stats[1]} · 持有 ${h.owned[key]||0}`}),
+          node("p",{text:p.lore}));
+        if(!atlas && !state.run && h.owned[key] && !equipped.includes(key)){
+          const select=node("select",{"aria-label":p.name+"的祝福槽位"},...h.slots.map((old,i)=>node("option",{value:i+1,
+            text:`槽 ${i+1} · ${old?h.pieces[old].name:"空"}`})));
+          select.value=String(Math.max(0,h.slots.indexOf(null))+1);
+          line.append(select,button("装入此槽",()=>ctx.execute(control("装配祝福","equip_blessing",
+            {slot:Number(select.value),piece:key}),{inline:true}),"inv-utility"));
+        }
+        details.append(line);
+      }
+      body.append(details);
+    }
+    return body;
+  }
+
   function showGear(ctx) {
     const { node, button } = ctx;
     const { run } = ctx.state;
@@ -510,6 +549,7 @@ window.ElevatorInventory = (() => {
         ...Array.from(wornSets, ([name, count]) => node("p", { className: "item-facts",
           text: `${name} · ${count}/4 件${count >= 4 ? " · 四件效果生效" : count >= 2 ? " · 两件效果生效" : ""}` })),
       ),
+      heirloomCabinet(ctx,false),
       run ? node("section", { className: "inv-list" },
         node("div", { className: "inv-list-head" }, node("h2", { text: "本局临时装备" }),
           run.field_offer ? button("处理待选装备", () => ctx.focusView("station"), "inv-utility") : null),
@@ -565,6 +605,7 @@ window.ElevatorInventory = (() => {
         filter: true, sort: sortAtlas, paginate: false,
         countText: list => `已点亮 ${format(list.filter(i => i.unlocked).length)} / ${format(list.length)}`,
       }),
+      heirloomCabinet(ctx,true),
       rainbow.length ? section(ctx, "rainbow", "虹彩套装 · 背包技能", rainbow, {
         sort: sortAtlas, paginate: false,
         countText: () => `已点亮 ${format(rainbowSkills.filter(s => s.unlocked).length)} / ${format(rainbowSkills.length)}`,

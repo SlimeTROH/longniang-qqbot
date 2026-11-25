@@ -6,7 +6,7 @@ from collections import Counter
 from pathlib import Path
 from random import Random
 
-from . import expedition
+from . import expedition, heirlooms
 
 RARITIES = ("white", "green", "blue", "purple", "gold", "red")
 SLOTS = ("武器", "护甲", "挂件", "核心")
@@ -54,6 +54,8 @@ class Catalog:
             raise ValueError("虹彩背包技能配置不完整")
 
     def definition(self, key: str) -> dict:
+        if key in heirlooms.PIECES:
+            return heirlooms.PIECES[key]
         return self.items[key] if key in self.items else self.equipment[key]
 
     def name(self, loot: dict, *, symbol: bool = True) -> str:
@@ -65,7 +67,7 @@ class Catalog:
         return self.rarities[self.rarity(loot)]["symbol"] + label if symbol else label
 
     def rarity(self, loot: dict) -> str:
-        return loot.get("rarity") or self.items[loot["id"]]["rarity"]
+        return loot.get("rarity") or ("shining" if loot["id"] in heirlooms.PIECES else self.items[loot["id"]]["rarity"])
 
     def value(self, loot: dict) -> int:
         return loot["value"]

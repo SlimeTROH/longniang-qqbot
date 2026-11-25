@@ -244,6 +244,7 @@ class ElevatorWebIntegration(unittest.TestCase):
         self.assertEqual(response.status_code,201)
         proof = response.json()["challenge"]["code"]
         self.auth.confirm(proof,self.qq,group_id=self.group,nickname="网页乘客")
+        rules.ElevatorGame(self.game_db).execute(self.qq,"网页乘客",self.group,"pursue","1 8")
 
     def prepare_elite_encounter(self, *, powerful=False):
         self.bind()
@@ -284,6 +285,7 @@ class ElevatorWebIntegration(unittest.TestCase):
         with self.assertRaises(AuthError):
             self.auth.confirm(proof,"2345678",group_id=self.group)
         self.auth.confirm(proof,self.qq,group_id=self.group,nickname="网页乘客")
+        rules.ElevatorGame(self.game_db).execute(self.qq,"网页乘客",self.group,"pursue","1 8")
         self.assertEqual(self.web.get(API+"/auth/session").json(),{"account":{"username":"webuser","bound":True}})
         state = self.web.get(API+"/game/state").json()
         self.assertEqual(self.post("/game/action",{"action":"delete","revision":state["revision"]}).status_code,422)

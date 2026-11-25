@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS rush_preferences (
     event_mode TEXT NOT NULL DEFAULT 'pause' CHECK(event_mode IN ('pause','random','ignore')),
     auto_elite INTEGER NOT NULL DEFAULT 0 CHECK(auto_elite IN (0,1))
 );
+CREATE TABLE IF NOT EXISTS heirloom_inventory (
+    user_id TEXT NOT NULL REFERENCES players(user_id), piece TEXT NOT NULL,
+    quantity INTEGER NOT NULL CHECK(quantity>0), PRIMARY KEY(user_id,piece)
+);
+CREATE TABLE IF NOT EXISTS heirloom_loadouts (
+    user_id TEXT PRIMARY KEY REFERENCES players(user_id), focus TEXT NOT NULL, slots TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS equipment (
     equip_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES players(user_id),
     base_id TEXT NOT NULL, rarity TEXT NOT NULL, stats TEXT NOT NULL,

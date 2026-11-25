@@ -21,6 +21,7 @@ class ElevatorLimits(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.game = game.ElevatorGame(Path(temp.name) / "save.sqlite3", rng=Random(71))
+        self.game.execute("1","玩家","2","pursue","1 8",now=1795470011)
         self.game.execute("1", "玩家", "2", "rename", "__keep_start__", now=1795470012)
 
     def turn(self, db):
