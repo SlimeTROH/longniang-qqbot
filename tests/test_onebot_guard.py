@@ -77,6 +77,36 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         for i, text in enumerate(("好感度 重置", "好感度 历史 12346", "你好"), 4):
             self.assertIsNone(self.adapter.json_to_event(message(message_id=i, user_id=12347, text=text)))
 
+    async def test_private_elevator_reply_is_paced_and_bound_to_the_requester(self):
+        self.adapter._private_admins = lambda: {"12346"}
+        bot = SimpleNamespace(self_id="12345")
+        async def play(_bot, _event, send):
+            await send("电梯大厅")
+            return True
+        module = SimpleNamespace(
+            private_candidate=lambda event: event.get_plaintext() == "电梯",
+            handle_private_event=AsyncMock(side_effect=play),
+        )
+        with patch("onebot_guard.get_plugin", return_value=SimpleNamespace(module=module)), \
+                patch.object(OneBotAdapter, "_call_api", new_callable=AsyncMock) as forward:
+            self.assertIsNone(self.adapter.json_to_event(message(user_id=12347, text="你好")))
+            event = self.adapter.json_to_event(message(user_id=12347, text="电梯"))
+            self.assertIsNotNone(event)
+            self.assertTrue(self.adapter.uses_private_elevator(event))
+            self.assertTrue(await self.adapter.dispatch_private_elevator(bot, event))
+            forward.assert_awaited_once_with(bot, "send_private_msg", user_id=12347, message="电梯大厅")
+            with self.assertRaises(ActionFailed):
+                await self.adapter._call_api(bot, "send_private_msg", user_id=12347, message="无关消息")
+            self.assertIsNone(self.adapter.json_to_event(message(user_id=12347, text="电梯")))
+
+    async def test_private_elevator_dispatch_preserves_existing_query_routes(self):
+        self.adapter._private_admins = lambda: {"12346"}
+        bot = SimpleNamespace(self_id="12345")
+        for index, text in enumerate(("好感度历史", "图像配额"), 1):
+            event = self.adapter.json_to_event(message(user_id=12347, message_id=index, text=text))
+            self.assertFalse(self.adapter.uses_private_elevator(event))
+            self.assertFalse(await self.adapter.dispatch_private_elevator(bot, event))
+
     async def test_private_image_quota_returns_only_to_the_requester(self):
         self.adapter._private_admins = lambda: {"12346"}
         bot = SimpleNamespace(self_id="12345")

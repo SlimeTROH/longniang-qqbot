@@ -12,6 +12,8 @@ from typing import Optional
 import httpx
 from nonebot import logger
 from nonebot.adapters.onebot.v11 import Bot, Message, MessageEvent, MessageSegment
+from nonebot.adapters.onebot.v11.event import Reply
+from nonebot.compat import model_dump
 from nonebot.rule import Rule
 
 from .conversation_scope import quote_allowed as _quote_allowed, sender_name, speaker_label
@@ -19,6 +21,7 @@ from .conversation_scope import quote_allowed as _quote_allowed, sender_name, sp
 FACE_TYPES = ("mface", "face")
 _CQ_REPLY_RE = re.compile(r"\[(?:CQ:)?reply[^\]]*?id=([^,\]]+)")
 _CQ_RE = re.compile(r"\[CQ:([a-zA-Z_]+)((?:,[^\]]*)?)\]")
+_MESSAGE_ID = re.compile(r"-?[0-9]{1,20}")
 _MARKDOWN_IMAGE_RE = re.compile(
     r'''(?<!\\)!\[(?:\\.|[^\[\]\\\r\n])*\]\([ \t]*(?:<([^<>\s]+)>|([^<>()\s]+))'''
     r'''(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'))?[ \t]*\)'''
@@ -226,28 +229,82 @@ async def fetch_quote(bot: Bot, event: MessageEvent) -> tuple[str, list[dict], s
         logger.warning("chat_bot: 已忽略不属于当前群的引用消息")
         return "", [], ""
 
-    texts: list[str] = []
-    images: list[dict] = []
-    msg_list = data.get("message")
-    if isinstance(msg_list, list) and msg_list:
-        body, images = segments_to_parts(msg_list)
-        if body:
-            texts.append(body)
-
-    if not texts and not images:
-        for key in ("raw_message", "message"):
-            raw = data.get(key)
-            if isinstance(raw, str) and raw:
-                cq_text, cq_images = parse_cq(raw)
-                if cq_text:
-                    texts.append(cq_text)
-                images.extend(cq_images)
-                break
-
+    body, images = _message_parts(data)
     sender = data.get("sender") or {}
     uid = data.get("user_id") or (sender.get("user_id") if isinstance(sender, dict) else None)
     author = speaker_label(str(uid), sender_name(sender)) if str(uid).isdigit() else "发言人未知"
-    return "".join(texts).strip(), images, author
+    return body, images, author
+
+
+def _message_parts(data: dict) -> tuple[str, list[dict]]:
+    segments = data.get("message")
+    if isinstance(segments, list):
+        body, images = segments_to_parts(segments)
+        if body or images:
+            return body, images
+    for key in ("raw_message", "message"):
+        raw = data.get(key)
+        if isinstance(raw, str) and raw:
+            return parse_cq(raw)
+    return "", []
+
+
+def _parent_message_id(data: dict) -> str:
+    message = data.get("message")
+    if isinstance(message, list) and message:
+        for part in message:
+            if isinstance(part, dict) and part.get("type") == "reply":
+                fields = part.get("data")
+                return str(fields.get("id") or "").strip() if isinstance(fields, dict) else ""
+        return ""
+    raw = data.get("raw_message") or message
+    if isinstance(raw, str):
+        for match in _CQ_RE.finditer(raw):
+            if match[1] == "reply":
+                for item in match[2].split(","):
+                    key, _, value = item.partition("=")
+                    if key.strip() == "id":
+                        return value.strip()
+    return ""
+
+
+async def fetch_quoted_reply_images(bot: Bot, event: MessageEvent) -> list[dict]:
+    """Recover images behind at most two of this bot's replies in the current group."""
+    mid = quote_id(event) or ""
+    if (
+        not getattr(event, "group_id", None) or is_private_event(event)
+        or str(bot.self_id) != str(event.self_id) or not _MESSAGE_ID.fullmatch(mid)
+    ):
+        return []
+
+    reply = getattr(event, "reply", None)
+    data = model_dump(reply) if isinstance(reply, Reply) and str(reply.message_id) == mid else None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 3.0
+    seen = {mid, str(getattr(event, "message_id", ""))}
+    for hop in range(3):
+        if data is None:
+            try:
+                data = await asyncio.wait_for(bot.call_api("get_msg", message_id=mid), deadline - loop.time())
+            except Exception as exc:  # noqa: BLE001 - backend errors end this optional lookup
+                logger.debug(f"chat_bot: 历史引用补图未完成（{type(exc).__name__}）")
+                return []
+        if not isinstance(data, dict) or not _quote_allowed(event, data):
+            return []
+        _, images = _message_parts(data)
+        if images:
+            return images if hop else []
+        if hop == 2:
+            return []
+        sender = data.get("sender")
+        if not isinstance(sender, dict) or str(sender.get("user_id", "")) != str(bot.self_id):
+            return []
+        mid = _parent_message_id(data)
+        if mid in seen or not _MESSAGE_ID.fullmatch(mid):
+            return []
+        seen.add(mid)
+        data = None
+    return []
 
 
 async def _fetch_markdown_image(value: str) -> Optional[bytes]:

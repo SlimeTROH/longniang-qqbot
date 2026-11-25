@@ -168,11 +168,13 @@ class CommandVisibilityTests(unittest.IsolatedAsyncioTestCase):
 
         session = SimpleNamespace(recent=[{}], archive_text=lambda: "archive")
         histories = {"group:123": session, "private:42": session}
-        self.env.update(_history_scope=scope, histories=histories, _save_histories=Mock(return_value=True))
-        event = SimpleNamespace(message_type="private", user_id=42)
+        self.env.update(_history_scope=scope, histories=histories, _save_histories=Mock(return_value=True),
+                        _image_history=Mock())
+        event = SimpleNamespace(message_type="private", user_id=42, self_id=77)
         await self.env["handle_chat_cmd"](self.bot, event, Message("清空上下文　123"))
         self.assertEqual(entered, ["group:123"])
         self.assertEqual(histories, {"private:42": session})
+        self.env["_image_history"].forget.assert_called_once_with(("77","group:123"))
 
     async def test_model_and_effort_commands_require_an_admin_in_group_or_private(self):
         change = AsyncMock()

@@ -50,6 +50,7 @@ from . import (
     farm_bridge,
     game_controller,
     guard,
+    historical_images,
     image_generation,
     image_quota,
     llm,
@@ -487,6 +488,7 @@ async def _maybe_compress_history(key: str) -> None:
 _reply_slots = asyncio.Semaphore(env_config.env_int("CHAT_CONCURRENT_REPLIES", 6, minimum=1, maximum=16))
 _pending_images: dict[str, list[tuple[float, bytes]]] = {}
 PENDING_IMAGE_TTL = 300.0
+_image_history = historical_images.ImageHistory()
 
 _META_HINTS = (
     "机器人", "你是ai", "你是 ai", "模型", "提示词", "prompt", "出戏", "扮演",
@@ -501,6 +503,22 @@ def _take_pending_images(scope_key: str) -> list[bytes]:
     items = _pending_images.pop(str(scope_key), [])
     now = time.time()
     return [data for ts, data in items if now - ts <= PENDING_IMAGE_TTL]
+
+
+async def _recall_turn_images(bot: Bot, event: MessageEvent, scope: tuple[str, str],
+                              speaker: str, text: str) -> list[tuple[str, bytes]]:
+    quoted_id = message_io.quote_id(event)
+    if not historical_images.refers_to_image(text, quoted=bool(quoted_id)):
+        return []
+    cached = _image_history.recover(scope, speaker, quoted_id)
+    if cached:
+        origin = "引用回复关联的历史原图" if quoted_id else "该发言人近期发过的原图"
+        return [(origin, image) for image in cached[-llm.CHAT_IMAGE_LIMIT:]]
+    if not quoted_id:
+        return []
+    segments = (await message_io.fetch_quoted_reply_images(bot, event))[:3]
+    images = await asyncio.gather(*(_fetch_image(seg, bot) for seg in segments))
+    return [("沿引用找回的历史原图", image) for image in images if image]
 
 
 async def _generate_reply(messages: list[dict], system_prompt: str, **options) -> llm.ChatResult:
@@ -903,6 +921,7 @@ async def handle_chat_cmd(bot: Bot, event: MessageEvent, arg: Message = CommandA
                 if session_old is not None:
                     histories[key] = session_old
                 await status_cmd.finish("上下文清空失败，请稍后重试。")
+            _image_history.forget((str(event.self_id), key))
         await status_cmd.finish(
             f"已清空{label}，共 {n} 条消息{'和归档上下文' if had_summary else ''}。"
         )
@@ -1169,6 +1188,7 @@ async def handle_aff_query(bot: Bot, event: MessageEvent) -> None:
             if old_session and not _save_histories(private_key):
                 histories[private_key] = old_session
                 await aff_query.finish(_reply_to(event, "好感度已重置，对话上下文清空失败，请稍后重试。"))
+            _image_history.forget((str(event.self_id), private_key))
 
         n_hist = affection_log.clear_affection_history(AFFECTION_HISTORY_FILE, uid)
         n_mem = memory_store.clear(uid)
@@ -1527,6 +1547,8 @@ async def _run_turn(
     author_fields = {"speaker_id": user_id, "speaker_name": display_name, "at": received_at or time.time()}
 
     context_key = _session_key(event, user_id)
+    image_scope = str(event.self_id), context_key
+    image_message_id = str(event.message_id)
     _sess = histories.get(context_key)
     context_messages = [attributed_message(m) for m in _history_messages(_sess)] if _sess else []
 
@@ -1555,7 +1577,13 @@ async def _run_turn(
     dropped = max(0, len(pending) + len(quoted) + len(current) - llm.CHAT_IMAGE_LIMIT)
     pending = pending[dropped:]
     attachments = [("先前单独发来的图", data) for data in pending] + quoted + current
+    if not attachments and not image_segs and not proactive_focus:
+        attachments = await _recall_turn_images(bot, event, image_scope, user_id, text)
+        if attachments:
+            logger.info(f"chat_bot: 为视觉追问找回 {len(attachments)} 张历史图片")
     raw_images = [data for _, data in attachments]
+    if raw_images:
+        _image_history.remember(image_scope, user_id, image_message_id, raw_images)
     quote_image_count = len(quoted)
 
     if quote_text or quote_images:
@@ -1721,6 +1749,7 @@ async def _run_turn(
     tools: dict[str, llm.ChatTool] = {}
     task_notice = ""
     turn_lookup_notes: list[str] = []
+    elevator_output = elevator_knowledge.ElevatorToolOutput()
     if OPENAI_KEY and not append_card and not proactive_focus:
         tools = vision_router.image_tools(
             raw_images, baidu_cfg=_baidu_creds(),
@@ -1821,6 +1850,8 @@ async def _run_turn(
             user_id, turn_lookup_notes,
             group_id=str(group_id or ""),
             nickname=(getattr(event.sender, "card", None) or getattr(event.sender, "nickname", None) or "群友"),
+            user_text="" if proactive_focus else text,
+            output=elevator_output,
         ))
 
     # ---- 3. 组装恒定静态前缀 + 尾部动态运行时状态 ----
@@ -1929,10 +1960,20 @@ async def _run_turn(
         + (f" ⚠️{result.error[:100]}" if result.error else "")
     )
 
+    elevator_card = elevator_output.card()
+    if not proactive_focus and not task_notice and not result.ok:
+        fallback = elevator_card
+        if not fallback and elevator_output.latest_lookup:
+            fallback = f"先把这次已查到的结果发给你：\n\n{elevator_output.latest_lookup}"
+        if fallback:
+            result = llm.ChatResult(reply=fallback)
+            elevator_card = ""
+
     if proactive_focus:
         reply = result.reply.strip() if result.ok else ""
         if reply and _can_observe_group(event):
             sent = await bot.send(event, MessageSegment.text(reply), at_sender=False, reply_message=False)
+            _image_history.record_reply(image_scope, image_message_id, sent)
             awareness.rooms.record_reply(event, persona.name, reply, sent)
             session.recent.append({"role": "user", "content": user_content, **author_fields})
             session.recent.append({"role": "assistant", "content": reply, **author_fields})
@@ -2013,9 +2054,11 @@ async def _run_turn(
 
     stored_assistant = task_notice or result.reply.strip() or "嗯……"
     stored_assistant_history = stored_assistant
+    if elevator_card and elevator_card not in stored_assistant:
+        stored_assistant_history += f"\n\n{elevator_card}"
     if turn_lookup_notes and not task_notice:
         digest = "；".join(turn_lookup_notes)[:720]
-        stored_assistant_history = f"{stored_assistant}\n\n（本轮已检索核实：{digest}）"
+        stored_assistant_history += f"\n\n（本轮已检索核实：{digest}）"
     session.recent.append({"role": "user", "content": user_content, **author_fields})
     session.recent.append({"role": "assistant", "content": stored_assistant_history, **author_fields})
     _save_histories(context_key)
@@ -2027,14 +2070,19 @@ async def _run_turn(
     final_reply = stored_assistant
     if append_card:
         final_reply = f"{stored_assistant}\n\n{append_card}"
+    if elevator_card and elevator_card not in final_reply:
+        final_reply = f"{final_reply}\n\n{elevator_card}"
 
     try:
-        if not task_notice:
+        if not task_notice or elevator_card:
             await asyncio.sleep(random.uniform(0.0, 2.0))
+            if task_notice:
+                final_reply = elevator_card
             outgoing = _reply_to(event, final_reply)
             if mem_scope == "group" and lookup is not None and (result.mentions or result.avatar):
                 outgoing = await lookup.reply(final_reply, mentions=result.mentions, avatar=result.avatar)
             sent = await chat_matcher.send(outgoing)
+            _image_history.record_reply(image_scope, image_message_id, sent)
             if mem_scope == "group":
                 awareness.rooms.record_reply(event, persona.name, final_reply, sent)
         mem_hint = await memory_task

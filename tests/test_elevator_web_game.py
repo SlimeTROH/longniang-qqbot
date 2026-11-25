@@ -394,6 +394,43 @@ class GameStateTest(unittest.TestCase):
         self.assertEqual(result["departure"]["value"], 0)
         self.assertIsNone(self.state()["run"])
 
+    def test_doll_preserves_loot_after_battle_loss_without_an_extraction(self):
+        self.command("start", {"map_id": "mall"})
+        game = self.web.game
+        with game.store.transaction() as db:
+            turn = rules.Turn(game, db, "101", "群友甲", "110", self.now)
+            turn.player["runs"] = 4
+            turn.run["floor"] = 8
+            turn.run["event"] = {"kind": "combat", "enemy": rules.combat.monster(turn.catalog.maps["mall"], 8, turn.rng, boss=True)}
+            turn.run["bag"] = [{"id": "coffee", "value": 300, "quality": ""}]
+            turn.run["safe"] = [turn.catalog.ordinary_item("doll", turn.rng), {"id": "snack", "value": 50, "quality": ""}]
+            turn.persist()
+
+        def lose(run, enemy, rng):
+            result = rules.combat.FightResult(rounds=1, player_start_hp=run["hp"], enemy_start_hp=enemy["hp"])
+            run["hp"] = 0
+            return result
+
+        with patch.object(rules.combat, "fight", side_effect=lose):
+            outcome = self.command("fight")
+        self.assertEqual(outcome["result"]["battle"]["outcome"], "defeat")
+        departure = outcome["result"]["departure"]
+        self.assertFalse(departure["extracted"])
+        self.assertTrue(departure["protected_by_doll"])
+        self.assertEqual(departure["value"], 350)
+        self.assertEqual(outcome["result"]["outcome"], "failed")
+        self.assertIn("替身保全", outcome["result"]["summary"])
+        state = outcome["state"]
+        self.assertIsNone(state["run"])
+        self.assertEqual({item["id"] for item in state["warehouse"]}, {"coffee", "snack"})
+        with game.store.read() as db:
+            self.assertEqual(db.execute("SELECT extracts FROM players WHERE user_id='101'").fetchone()[0], 0)
+            for table in ("season_stats", "season_map_stats"):
+                self.assertEqual(tuple(db.execute(
+                    f"SELECT max_floor,floor_value,best_extract_floor,best_extract_value FROM {table} WHERE user_id='101'"
+                ).fetchone()), (8, 0, 0, 0))
+            self.assertFalse(db.execute("SELECT 1 FROM relics WHERE owner_id='101'").fetchone())
+
     def test_shared_damage_equipment_stacks_and_grenade_retains_boss_floor(self):
         self.command("start", {"map_id": "mall"})
         item_id = "field_game_balance"

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import time
 from collections import Counter
@@ -284,6 +285,7 @@ def _render_web_play() -> str:
         "【网页版操作】网页与 QQ 共用存档。从 QQ 切回网页，可点顶部同步按钮取得最新状态。\n"
         "• 手机点底部标签切换探索、仓库、装备、交易和图鉴，也可在空白区域左右滑。"
         "电脑 1–5 切换这些页。探索页 E 下潜或深入，Shift+E 按已保存的档位连战，F 战斗，R 撤离，Q 背包，T 临装，B 战报。\n"
+        "• 在探索页「连战设置」可选层数、金红掉落是否暂停、奇遇处理方式，以及是否自动打精英。设置与 QQ 共用。\n"
         "• 选地图后可从仓库选携带补给。楼层号和生命下方显示本层拾取。战斗后直接显示胜负、伤害、战利品和逐回合战报。"
         "奇遇结算显示收获、代价和效果，跳层时还会标明出发与抵达层。\n"
         "• 点物品卡片任意处打开详情。网页仓库每页 72 件，默认按品质从高到低，再按单价排列。"
@@ -312,11 +314,13 @@ def _render_exploration() -> str:
     return (
         "【探索、撤离和遗物】深入一层会生成新的遭遇。奇遇选项也可能让你跳层，"
         "但连进、跃迁卡、奇遇都会在下一处未通过的首领层停下。\n"
-        "• 连战预设 3、5、10 层，默认 3 层。普通怪可自动打，精英和首领会在出手前停。发「连战设置」或在网页保存档位。仅金红掉落暂停可跳过，奇遇、遗物、待选临装、残血等仍停。"
-        "上一轮打完只剩不超过一半生命也会停。\n"
+        "• 连战预设 3、5、10 层，默认 3 层。发「连战设置」或打开网页探索页的连战设置。"
+        "奇遇默认暂停，可改为从付得起的选项中随机选择并正常结算，或无视奇遇继续深入。"
+        "精英默认暂停，可开启自动打精英。金红掉落是否暂停可单独设置。"
+        "首领、遗物、待选临装、生命不超过一半、战斗平手及触发撤离伏击前的停点仍会暂停。\n"
         "• 本层清怪后会安全撤离。地图触发撤离伏击时，有在场怪就会由它守门并保留当前生命，空层会出现精英守门怪。"
         "打倒守门怪或用烟雾弹就能出门。普通战斗用烟雾弹是脱战留在本层，首领或守门怪战斗中用是立即撤离。\n"
-        "• 本局连续 30 分钟没操作会自动安全撤离，物资入库并计有效撤离。替身娃娃放在背包或安全箱都能在致死时自动消耗并撤离。"
+        "• 本局连续 30 分钟没操作会自动安全撤离，物资入库并计有效撤离。背包或安全箱里的替身娃娃在致死时自动消耗，保住物资，本局按战败结算。"
         "前 3 局翻车有保险，之后失去普通背包物资。\n"
         "• 无保险翻车丢的背包价值至少 300 金才留下遗物盒，保存 24 小时。"
         "遗物限同地图、与掉落层差不超过一层，自己不会碰到自己的盒。带走遗物得活着撤离，归还则直接让原主收回物资。"
@@ -691,7 +695,8 @@ def _render_api_reference(data: dict) -> str:
         f"• start：地图名 [| 道具 数量 ... 或 | 带药]（消耗 1 通行证+门票；地图：{maps_s}；可写「推荐 | 带药」）\n"
         f"• simulate：地图名（免费模拟战，0消耗/不带出/不计榜，全地图开放并自带演习补给包）\n"
         "━━ 三、局内动作接口（需在电梯探索局内）━━\n"
-        "• down：（空，深入下一层）｜rush：最多10层（默认按玩家3/5/10档位，遇精英/首领必停，金红可选择继续）\n"
+        "• down：（空，深入下一层）｜rush：最多10层（留空用玩家档位。首领必停，奇遇、精英和金红按连战设置处理）\n"
+        "• rush_settings：3/5/10、跳过金红/遇金红暂停、遇奇遇暂停/随机奇遇/无视奇遇、遇精英暂停/自动打精英，可用空格组合。\n"
         "• fight：（空，硬刚当前怪）｜flee：（空，溜走）｜extract：（空，撤离回大厅；本层清怪后撤离 0% 伏击）\n"
         "• save_box：[物品名、背包序号或空]（锁最贵或指定物品进安全箱）"
         "｜swap_box：空参数自动换入更贵货，或填「背包物品 | 保险箱物品」指定交换"
@@ -711,7 +716,9 @@ def _render_commands() -> str:
     return (
         "【常用指令与快捷操作速查（所有菜单均支持直接回序号，引用也行）】\n"
         "• 大厅与开局：电梯、下潜（回「2 冰美式 2 烟雾弹」或「2 带药」带药进图）、悬赏 / 每日任务、改名 新昵称（全服跨群共享）\n"
-        "• 局内操作：进(深入)、连战 / 连战设置（3、5、10层；精英、首领必停；可开启跳过金红）、打(硬刚)、跑(溜走)、撤(撤离)、战报(合并转发看上一场逐回合详情)、存箱 / 换箱、摇人、使用 名称、背包\n"
+        "• 局内操作：进(深入)、连战、打(硬刚)、跑(溜走)、撤(撤离)、战报(合并转发看上一场逐回合详情)、存箱 / 换箱、摇人、使用 名称、背包。\n"
+        "• 连战设置可组合使用，例如「连战设置 5 随机奇遇 自动打精英」。"
+        "可选 3/5/10 层、跳过金红/遇金红暂停、遇奇遇暂停/随机奇遇/无视奇遇、遇精英暂停/自动打精英。首领仍会暂停。\n"
         "• 临装拾取：回菜单序号确认装备到第一个空槽，槽满时可选替换任一槽。也可放弃。"
         "错过菜单可发「局内道具」或「临装」重新打开。"
         "同款可戴两件。卸下时可发「局内道具 解除 名称 1」或「局内道具 解除 名称 2」指定槽位。\n"
@@ -750,7 +757,7 @@ def _search_knowledge(data: dict, query: str) -> str:
         hits.append(_render_web_play())
     if any(word in q for word in ("保险箱", "安全箱", "换箱", "取回背包", "扩容袋")):
         hits.append(_render_safe())
-    if any(word in q for word in ("撤离", "伏击", "遗物", "舔包", "捞尸", "超时", "连进")):
+    if any(word in q for word in ("撤离", "伏击", "遗物", "舔包", "捞尸", "超时", "连进", "连战", "随机奇遇", "无视奇遇", "自动打精英")):
         hits.append(_render_exploration())
     if any(word in q for word in ("战斗", "战报", "平手", "先手", "逃跑", "败逃", "回合")):
         hits.append(_render_combat())
@@ -930,7 +937,7 @@ def _item_name(data: dict, key: str) -> str:
     return spec.get("name", key)
 
 
-def _run_observations(data: dict, run: dict, safe_capacity: int) -> list[str]:
+def _run_observations(data: dict, run: dict, safe_capacity: int, *, compact_bag: bool = False) -> list[str]:
     floor = run["floor"]
     place = data["maps"].get(run["map"], {}).get("name", run["map"])
     phase = "模拟战" if run.get("sim") else "正式局"
@@ -973,8 +980,12 @@ def _run_observations(data: dict, run: dict, safe_capacity: int) -> list[str]:
     for key, label in (("bag", "局内背包"), ("safe", "安全箱")):
         items = run.get(key, [])
         number = f"{len(items)}/{safe_capacity} 格" if key == "safe" else f"{len(items)} 件"
+        listed = list(enumerate(items, 1))
+        if key == "bag" and compact_bag and len(listed) > 12:
+            listed = sorted(listed, key=lambda entry: entry[1]["value"], reverse=True)[:12]
+            number += "，仅列最贵 12 件"
         shown = "、".join(f"{i}.{_item_name(data, item['id'])}（{item['value']:,} 金）"
-                         for i, item in enumerate(items, 1))
+                         for i, item in listed)
         lines.append(f"{label}（{number}）：" + (shown or "空"))
 
     result = run.get("floor_result") or {}
@@ -1098,7 +1109,8 @@ def lookup_player_status(user_id: str, section: str, group_id: str = "") -> str:
         if section == "atlas":
             total=sum(v["kind"]=="collection" for v in data["items"].values())
             return "\n".join(_season_rules().atlas_lines(data["expedition"],archives,total))
-        if section == "all":
+        if section in ("all", "plan"):
+            detail_limit = 60 if section == "all" else 0
             lv = min(25, int(player["extracts"]))
             eq_prices = data["expedition"]["gear_sell"]
             safe_costs = data.get("safebox_prices", {"2": 6000, "3": 30000, "4": 88000})
@@ -1157,7 +1169,8 @@ def lookup_player_status(user_id: str, section: str, group_id: str = "") -> str:
                 f"地图权限：已解锁 {', '.join(unlocked_maps)}" + (f"｜未解锁 {', '.join(locked_maps)}" if locked_maps else ""),
             ]
 
-            parts.extend(_season_rules().atlas_lines(data["expedition"],archives,col_total))
+            if detail_limit:
+                parts.extend(_season_rules().atlas_lines(data["expedition"],archives,col_total))
             view = {"stats":total_stats,"hp":total_stats["hp"],"perks":active_perks,"floor":1,"tea_until":0}
             if run_row:
                 run = json.loads(run_row["payload"])
@@ -1165,7 +1178,8 @@ def lookup_player_status(user_id: str, section: str, group_id: str = "") -> str:
                 if run.get("archive_version",0) < _season_rules().ARCHIVE_VERSION:
                     view = {**run,"stats":total_stats,"perks":active_perks,
                             "hp":max(1,round(run["hp"]*total_stats["hp"]/max(1,run["stats"]["hp"])))}
-                parts.extend(_run_observations(data, run, player["safebox"] + run.get("safe_extra", 0)))
+                parts.extend(_run_observations(data, run, player["safebox"] + run.get("safe_extra", 0),
+                                               compact_bag=not detail_limit))
                 parts.append(f"局内状态：撬锁={'有' if run.get('lockpick') else '无'}｜VIP金库={'有' if run.get('gold_room') else '无'}"
                              f"｜侦察={run.get('peek') or '无'}" + (f"｜模拟币 {run.get('sim_gold', 0)}" if run.get("sim") else ""))
             else:
@@ -1180,8 +1194,10 @@ def lookup_player_status(user_id: str, section: str, group_id: str = "") -> str:
             sc_str = " ".join(f"{k}×{v}({v*eq_prices[k]:,}金)" for k, v in spare_counts.items() if v)
             non_gold_sum = sum(spare_counts[k] * eq_prices[k] for k in ("green", "blue", "purple"))
             bg_sum = sum(spare_counts[k] * eq_prices[k] for k in ("green", "blue"))
-            parts.append(f"闲置装备({len(spare_txt)}件｜{sc_str or '无'}｜蓝绿合计{bg_sum:,}金｜绿蓝紫全清{non_gold_sum:,}金)：" + ("；".join(spare_txt[:60]) if spare_txt else "无")
-                         + ("（明细展示前 60 件）" if len(spare_txt) > 60 else ""))
+            parts.append(f"闲置装备 {len(spare_txt)} 件｜{sc_str or '无'}｜蓝绿合计 {bg_sum:,} 金｜绿蓝紫全清 {non_gold_sum:,} 金")
+            if detail_limit and spare_txt:
+                parts.append("闲置明细：" + "；".join(spare_txt[:detail_limit])
+                             + ("（前 60 件）" if len(spare_txt) > detail_limit else ""))
 
             inv = con.execute("SELECT stock_id,item_id,quality,value,quantity FROM inventory WHERE user_id=? ORDER BY value DESC", (user_id,)).fetchall()
             bm_uses: dict[str, list[str]] = {}
@@ -1208,14 +1224,17 @@ def lookup_player_status(user_id: str, section: str, group_id: str = "") -> str:
                         any_green_cnt += r["quantity"]
                     if r["item_id"] not in bm_uses and sp.get("rarity") in ("white", "green", "blue"):
                         clear_mat_gold += r["value"] * r["quantity"]
-                if len(inv_lines) < 60:
+                if len(inv_lines) < detail_limit:
                     bm = f"[黑市:{'/'.join(bm_uses[r['item_id']])}]" if r["item_id"] in bm_uses else ""
                     inv_lines.append(f"#{r['stock_id']}{sp['name']}({r['item_id']}/{sp['kind']}/{sp.get('rarity','?')}{bm})×{r['quantity']}@{r['value']}金")
             parts.append(
-                f"仓库({len(inv)}项｜盲盒共{crate_cnt}个｜一键清仓可得{clear_mat_gold + spare_counts['green']*eq_prices['green']:,}金)："
-                + ("；".join(inv_lines) if inv_lines else "空")
-                + ("（明细展示前 60 项）" if len(inv) > len(inv_lines) else "")
+                f"仓库 {len(inv)} 项｜盲盒共 {crate_cnt} 个｜一键清仓可得 {clear_mat_gold + spare_counts['green']*eq_prices['green']:,} 金"
             )
+            if inv_lines:
+                parts.append("仓库明细：" + "；".join(inv_lines)
+                             + ("（前 60 项）" if len(inv) > len(inv_lines) else ""))
+            if not detail_limit and (inv or spare_txt):
+                parts.append("按编号或条件查具体物资和闲置装备时，用 query_elevator_inventory_page 筛选。")
 
             weekly = _weekly_recipes(data)
             bm_lines = []
@@ -1258,8 +1277,7 @@ def lookup_player_status(user_id: str, section: str, group_id: str = "") -> str:
                     o_txts = []
                     for o in orders:
                         steps = json.loads(o["steps_json"])
-                        s_brief = " → ".join(f"{st['action']}({st['argument']})" for st in steps)
-                        o_txts.append(f"{o['order_id']}[剩{max(1,(o['expires_at']-now_ts)//60)}分]:{o['summary']}({s_brief})")
+                        o_txts.append(f"{o['order_id']}[剩{max(1,(o['expires_at']-now_ts)//60)}分]：{o['summary']}（{len(steps)} 步）")
                     parts.append("待确认派单：" + "；".join(o_txts))
             except sqlite3.OperationalError:
                 pass
@@ -1375,10 +1393,13 @@ def lookup_inventory_page(user_id: str, area: str, rarity: str, query: str, page
                 if rarity not in ("all", grade):
                     continue
                 name = spec.get("name", key)
-                black_market = "｜黑市原料" if key in recipe_materials else ""
-                details = (f"#{row['stock_id']} {name}（{key}｜{spec.get('kind', '未知')}｜"
-                           f"{_RARITY_CN.get(grade, grade)}{black_market}）"
-                           f"｜品相 {row['quality'] or '无'}｜{row['quantity']} 件 × {row['value']:,} 金")
+                metadata = [key, spec.get("kind", "未知"), _RARITY_CN.get(grade, grade)]
+                if key in recipe_materials:
+                    metadata.append("黑市原料")
+                if row["quality"]:
+                    metadata.append(row["quality"])
+                details = (f"#{row['stock_id']} {name} {'/'.join(metadata)} "
+                           f"{row['quantity']}×{row['value']:,}金")
                 matches = needle == f"#{row['stock_id']}" if exact_id else needle in details.casefold()
                 if matches:
                     listing.append((details, row["value"] * row["quantity"]))
@@ -1448,14 +1469,37 @@ def _parse_order_steps(raw_steps: list[str]) -> list[dict]:
     return parsed
 
 
+class ElevatorToolOutput:
+    def __init__(self) -> None:
+        self.receipts: list[str] = []
+        self.latest_lookup = ""
+
+    def record_lookup(self, result: str) -> str:
+        if result:
+            self.latest_lookup = llm.clip_text(result, 3450)
+        return result
+
+    def card(self) -> str:
+        return "\n\n".join(dict.fromkeys(self.receipts))
+
+
+_ORDER_CONFIRMATION = re.compile(r"(?:确认(?:派单|执行)?|执行(?:派单)?|同意(?:执行|派单)?|通过)\s*(E[A-Z0-9]{4})", re.I)
+_CONFIRM_PENDING_ORDER = frozenset({"确认派单", "执行派单", "同意派单"})
+_ORDER_CANCELLATION = re.compile(r"(?:取消(?:派单|单号)?|作废)\s*(E[A-Z0-9]{4})", re.I)
+
+
 def elevator_tools(
     user_id: str,
     lookup_notes: list[str] | None = None,
     *,
     group_id: str = "",
     nickname: str = "群友",
+    user_text: str = "",
+    output: ElevatorToolOutput | None = None,
 ) -> dict[str, llm.ChatTool]:
     created_this_turn: set[str] = set()
+    output = output if output is not None else ElevatorToolOutput()
+    order_text = user_text.strip().rstrip("。！!").strip()
 
     async def _run_guide(args: dict) -> str:
         topic = args["topic"]
@@ -1464,7 +1508,7 @@ def elevator_tools(
         if lookup_notes is not None and result:
             compact = " ".join(result.split())[:320]
             lookup_notes.append(f"查无尽电梯资料({topic}:{query}) → {compact}")
-        return result
+        return output.record_lookup(result)
 
     async def _run_status(args: dict) -> str:
         section = args["section"]
@@ -1472,13 +1516,17 @@ def elevator_tools(
         if lookup_notes is not None and result:
             compact = " ".join(result.split())[:260]
             lookup_notes.append(f"查无尽电梯存档({section}) → {compact}")
-        return result
+        return output.record_lookup(result)
 
     async def _run_inventory_page(args: dict) -> str:
-        return await asyncio.to_thread(lookup_inventory_page, user_id, args["area"], args["rarity"],
-                                       args["query"], args["page"])
+        result = await asyncio.to_thread(lookup_inventory_page, user_id, args["area"], args["rarity"],
+                                         args["query"], args["page"])
+        return output.record_lookup(result)
 
     async def _run_collection_cleanup(args: dict) -> str:
+        if args["create_order"] and created_this_turn:
+            return "本轮已有待确认派单。用户可先确认或取消，程序会附上单号。"
+
         def prepare():
             game = _get_live_elevator_game()
             return game.plan_collection_cleanup(user_id, nickname, group_id or "private",
@@ -1487,9 +1535,9 @@ def elevator_tools(
         try:
             plan = await asyncio.to_thread(prepare)
         except ValueError as exc:
-            return str(exc)
+            return output.record_lookup(str(exc))
         if not plan["sale_count"]:
-            return "已核对整个仓库，没有符合规则的重复金红藏品，无需生成派单。"
+            return output.record_lookup("已核对整个仓库，没有符合规则的重复金红藏品，无需生成派单。")
         lines = [
             "已核对整个仓库。每种同名的金、红藏品各保留单价最高的一件。",
             f"预计出售 {plan['sale_count']:,} 件，获得 {plan['gold']:,} 金。",
@@ -1501,19 +1549,25 @@ def elevator_tools(
                              f"卖 {item['sale_count']} 件，得 {item['gold']:,} 金")
         if order_id := plan.get("order_id"):
             created_this_turn.add(order_id)
+            output.receipts.append(f"派单 {order_id} · 同名金红藏品各留最贵一件\n"
+                                   f"预计卖 {plan['sale_count']:,} 件，得 {plan['gold']:,} 金。\n"
+                                   f"10 分钟内回复「确认 {order_id}」或「取消 {order_id}」")
             lines.append(f"待确认派单 {order_id}（10 分钟内有效）。回复「确认 {order_id}」后出售，"
                          f"回复「取消 {order_id}」可作废。")
             if lookup_notes is not None:
                 lookup_notes.append(f"生成金红藏品去重派单 {order_id}，预计出售 {plan['sale_count']} 件，待本人确认")
         else:
             lines.append("以上为预计结果，未生成派单。")
-        return "\n".join(lines)
+        return output.record_lookup("\n".join(lines))
 
     async def _run_create_order(args: dict) -> str:
+        if created_this_turn:
+            return "本轮已有待确认派单。用户可先确认或取消，程序会附上单号。"
+
         summary = args["summary"].strip()
         raw_steps = args["steps"]
         steps = _parse_order_steps(raw_steps)
-        _IDLE_ONLY = {"sell", "buy", "craft", "decode", "wear", "autoequip", "reroll", "start", "simulate", "warehouse", "equipment"}
+        _IDLE_ONLY = {"sell", "buy", "craft", "decode", "wear", "autoequip", "reroll", "start", "simulate"}
         _RUN_ONLY = {"down", "rush", "fight", "flee", "extract", "save_box", "swap_box", "take_box", "use", "field_use", "field_pick", "event", "rob", "rescue", "leave", "flare"}
         def _create():
             g = _get_live_elevator_game()
@@ -1532,9 +1586,18 @@ def elevator_tools(
         try:
             order = await asyncio.to_thread(_create)
         except Exception as exc:
-            return f"派单校验未通过：{exc}"
+            return output.record_lookup(f"派单校验未通过：{exc}")
         oid = order["order_id"]
         created_this_turn.add(oid)
+        steps = order["steps"]
+        brief = [llm.clip_text(step["note"], 220) for step in steps[:4]]
+        if len(steps) > len(brief):
+            brief.append(f"另有 {len(steps) - len(brief)} 步")
+        output.receipts.append("\n".join([
+            f"派单 {oid} · {order['summary']}（{len(steps)} 步）",
+            " → ".join(brief),
+            f"10 分钟内回复「确认 {oid}」或「取消 {oid}」",
+        ]))
         lines = [
             f"【已生成正式派单，等待用户确认】",
             f"唯一派单号：{oid}（10 分钟内有效，仅限本人确认）",
@@ -1544,30 +1607,40 @@ def elevator_tools(
         for idx, st in enumerate(order["steps"], 1):
             lines.append(f"{idx}. {st['note']}（接口：{st['action']} {st['argument']}）")
         preview = "逐条说明操作" if len(order["steps"]) <= 8 else "可以按条件合并相同操作，说明处理范围、件数和预计金币"
-        lines.append(f"请展示派单号 {oid}，{preview}。提醒用户回复「确认 {oid}」后执行，「取消 {oid}」可作废。严禁当轮擅自执行！")
+        lines.append(f"回复可{preview}。程序会附上单号和确认方式。请保持等待用户确认。")
         out = "\n".join(lines)
         if lookup_notes is not None:
             lookup_notes.append(f"生成无尽电梯派单 {oid}({order['summary']}，共{len(order['steps'])}步，待确认)")
         return out
 
     async def _run_confirm_order(args: dict) -> str:
-        oid = args["order_id"].strip().upper()
-        if oid in created_this_turn:
-            return f"⛔ 安全拦截：派单 {oid} 是本轮刚刚生成的，必须等用户本人在下一条消息明确确认后才可执行，严禁当轮自动执行！"
+        confirmation = _ORDER_CONFIRMATION.fullmatch(order_text)
+        if not confirmation and order_text not in _CONFIRM_PENDING_ORDER:
+            return output.record_lookup("请让乘客本人回复「确认 单号」执行。")
+        oid = confirmation[1].upper() if confirmation else ""
+        if oid and oid != args["order_id"].strip().upper():
+            return output.record_lookup("工具单号与乘客确认的单号不同，请使用乘客确认的单号。")
+        if oid in created_this_turn or (not oid and created_this_turn):
+            return output.record_lookup("这张派单刚刚生成。乘客本人下一条消息确认后才能执行。")
         def _confirm():
             g = _get_live_elevator_game()
             return g.execute(user_id, nickname, group_id or "private", "confirm_order", oid)
         rep = await asyncio.to_thread(_confirm)
+        output.receipts.append(rep.text)
         if lookup_notes is not None:
             lookup_notes.append(f"执行无尽电梯派单 {oid} → {' '.join(rep.text.splitlines()[:3])[:220]}")
         return rep.text
 
     async def _run_cancel_order(args: dict) -> str:
         oid = args["order_id"].strip().upper()
+        cancellation = _ORDER_CANCELLATION.fullmatch(order_text)
+        if not cancellation or cancellation[1].upper() != oid:
+            return output.record_lookup("请让乘客本人回复「取消 单号」作废。")
         def _cancel():
             g = _get_live_elevator_game()
             return g.execute(user_id, nickname, group_id or "private", "cancel_order", oid)
         rep = await asyncio.to_thread(_cancel)
+        output.receipts.append(rep.text)
         if lookup_notes is not None:
             lookup_notes.append(f"取消无尽电梯派单 {oid} → {rep.text[:140]}")
         return rep.text
@@ -1597,15 +1670,17 @@ def elevator_tools(
             },
             _run_guide,
             silent=True,
+            blank_fields=frozenset({"query"}),
         ),
         "query_my_elevator_status": llm.ChatTool(
-            "静默查看当前发言人在《无尽电梯：群友搜打撤》中的真实存档状态。计算或派单前先查 section='all' "
-            "取得钱包、票数、安全箱、装备、仓库、局内遭遇和结算、待确认派单。闲置装备和仓库明细各最多展示 60 项，汇总按全部记录计算。",
+            "静默查看当前发言人的真实游戏存档。按问题选择最小范围；派单或计算优先用 plan 查完整汇总。"
+            "需要具体物品编号或带条件找物品时使用分页筛选。",
             {
                 "section": {
                     "type": "string",
-                    "enum": ["all", "group", "summary", "warehouse", "equipment", "quests", "run", "atlas"],
-                    "description": "all 为存档、装备和仓库汇总、本周黑市、商店、悬赏及待确认派单；"
+                    "enum": ["plan", "all", "group", "summary", "warehouse", "equipment", "quests", "run", "atlas"],
+                    "description": "plan 查钱包、票、安全箱、仓库和装备汇总、当前遭遇、黑市、商店、悬赏和待确认派单；"
+                                   "all 另外附库存和装备样本、图鉴详情；summary 查简要进度；"
                                    "group 查本群金雨、可支援信号、在局玩家、本群及全服当月各榜前三；"
                                    "run 查当前敌人、实际奇遇选项、箱格、两槽临装、待选临装和本层结算；还可查 summary/warehouse/equipment/quests/atlas。",
                 },
@@ -1614,7 +1689,7 @@ def elevator_tools(
             silent=True,
         ),
         "create_elevator_order": llm.ChatTool(
-            "开放全部《无尽电梯》游戏接口的 AI 派单工具。当检测到用户想让 bot 帮他操作游戏（卖装备/清仓库/买补给/抽箱/开盲盒/黑市兑换/穿戴配装/重铸/扩容/补票/改名/带药下潜/模拟战/连进/硬刚/撤离/用药/存箱等任意组合操作）时，先用 query_my_elevator_status(all) 查清真实存档并自行算好顺序与账目，再调用本工具生成带唯一单号的正式派单供用户确认。本工具只派单、绝不直接扣资源。",
+            "为用户明确要求的买卖、补给、装备、探索等操作生成待确认派单。先用 query_my_elevator_status(plan) 或 run 查清必要状态，再用本工具按顺序生成一张派单，确认前不扣资源。",
             {
                 "summary": {
                     "type": "string",
@@ -1630,10 +1705,13 @@ def elevator_tools(
                         "buy(参数: 补票/买药/coffee 5/smoke 2/gear_box 5/gear_box_mid 3/gear_box_high 2/safebox/ticket 2 等)、"
                         "decode(参数: 全部/5/蓝 全部)、craft(参数: 配方名 数量)、wear(参数: #equip_id)、autoequip(空)、reroll(参数: #equip_id)、"
                         "rename(参数: 新昵称)、blessing(空)、start(参数: 地图名 | 冰美式 2 烟雾弹 1 或 推荐 | 带药)、"
-                        "simulate(参数: 地图名)、down(空)、rush(参数: 1~10，留空使用个人档位)、fight(空)、flee(空)、extract(空)、"
+                        "simulate(参数: 地图名)、down(空)、rush(参数: 1~10，留空使用个人档位)、"
+                        "rush_settings(参数可组合: 3/5/10、跳过金红/遇金红暂停、遇奇遇暂停/随机奇遇/无视奇遇、"
+                        "遇精英暂停/自动打精英)、fight(空)、flee(空)、extract(空)、"
                         "save_box(空或物品名)、swap_box(空或 背包物品 | 保险箱物品)、take_box(保险箱格位，从 1 开始)、"
                         "use(道具名)、field_pick(楼层:道具ID:槽位，按实时状态选可用槽位或 0 放弃，需用户明确决定)、"
-                        "field_use(道具名或ID，旧临装可填道具ID 槽位)、event(选项序号)、rob(空)、rescue(空)、leave(空)、flare(空)、support(空或目标 QQ)。"
+                        "field_use(道具名或ID，旧临装可填道具ID 槽位)、field(参数: 解除 名称，用于卸下当前效果)、"
+                        "event(选项序号)、rob(空)、rescue(空)、leave(空)、flare(空)、support(空或目标 QQ)。"
                         "示例：['sell|蓝绿装|卖出闲置绿装×2+蓝装×3（按当前回收价估算）', 'buy|gear_box_mid 2|买2个进阶装备箱（-3,200金）', 'autoequip||一键穿戴最高战力装备']"
                     ),
                 },

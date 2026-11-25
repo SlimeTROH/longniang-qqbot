@@ -8,8 +8,9 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
 
+from nonebot import get_plugin
 from nonebot.adapters.onebot.v11 import Adapter as OneBotAdapter
-from nonebot.adapters.onebot.v11 import ActionFailed, Bot, Event, Message, MessageEvent, MessageSegment
+from nonebot.adapters.onebot.v11 import ActionFailed, Bot, Event, Message, MessageEvent, MessageSegment, PrivateMessageEvent
 from nonebot.drivers import Driver, Request, Response, WebSocket
 from nonebot.log import logger
 
@@ -49,6 +50,41 @@ class Adapter(OneBotAdapter):
 
     def _allows_private_peer(self, user_id: object) -> bool:
         return self._private_admins is None or str(user_id) in self._private_admins()
+
+    @staticmethod
+    def _private_query(event: PrivateMessageEvent) -> bool:
+        text = event.get_plaintext()
+        return is_affection_history(text) or is_image_quota_query(text)
+
+    @staticmethod
+    def _private_elevator(event: PrivateMessageEvent):
+        if str(event.user_id) == str(event.self_id):
+            return None
+        plugin = get_plugin("endless_elevator")
+        candidate = getattr(plugin.module, "private_candidate", None) if plugin else None
+        return plugin.module if candidate and candidate(event) else None
+
+    def uses_private_elevator(self, event: PrivateMessageEvent) -> bool:
+        return not self._private_query(event) and (
+            not self._allows_private_peer(event.user_id) or self._private_elevator(event) is not None
+        )
+
+    async def dispatch_private_elevator(self, bot: Bot, event: PrivateMessageEvent) -> bool:
+        """Handle permitted game DMs before the other plugin matchers see them."""
+        if not self._accepts_account(bot.self_id) or str(event.self_id) != str(bot.self_id):
+            return True
+        if self._private_query(event):
+            return False
+        game = self._private_elevator(event)
+        if game:
+            async def send(message: Message):
+                return await self._call_paced_api(
+                    bot, "send_private_msg", "send_private_msg", user_id=event.user_id, message=message,
+                )
+
+            if await game.handle_private_event(bot, event, send):
+                return True
+        return not self._allows_private_peer(event.user_id)
 
     def _check_inbound_account(self, account: object) -> bool:
         if self._accepts_account(account):
@@ -142,10 +178,9 @@ class Adapter(OneBotAdapter):
             and not getattr(event, "group_id", None)
         )
         if is_private and not self._allows_private_peer(getattr(event, "user_id", None)):
-            if not isinstance(event, MessageEvent):
+            if not isinstance(event, PrivateMessageEvent):
                 return None
-            text = event.get_plaintext()
-            if not (is_affection_history(text) or is_image_quota_query(text)):
+            if not (self._private_query(event) or self._private_elevator(event)):
                 return None
         if isinstance(event, MessageEvent) and event.message_id and self._is_replay(event):
             return None

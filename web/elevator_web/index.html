@@ -125,9 +125,11 @@
               <summary>连战设置</summary>
               <form id="rush-form" class="rush-form">
                 <label>每次层数 <select id="rush-floors"><option value="3">3 层</option><option value="5">5 层</option><option value="10">10 层</option></select></label>
+                <label>随机事件 <select id="rush-event"><option value="pause">停下</option><option value="random">随机选择</option><option value="ignore">无视</option></select></label>
+                <label><input id="rush-auto-elite" type="checkbox"> 遇到精英怪直接打</label>
                 <label><input id="rush-skip" type="checkbox"> 拾到金红物资时继续</label>
                 <button type="submit" class="quiet">保存设置</button>
-                <small>遇精英或首领会在开战前停下。</small>
+                <small>首领房会在开战前停下。</small>
               </form>
             </details>
             <details class="panel station-tools">

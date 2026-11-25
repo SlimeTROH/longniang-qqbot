@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import io
 import json
+import asyncio
 import re
 import sqlite3
 import sys
@@ -11,14 +12,15 @@ import tempfile
 import types
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Awaitable, Callable
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from random import Random
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from nonebot.adapters.onebot.v11 import Message, MessageSegment
+from nonebot.adapters.onebot.v11 import Message, MessageSegment, PrivateMessageEvent
 from PIL import Image
 
 from test_chat_group_settings import load_handlers
@@ -535,7 +537,7 @@ class MenuTests(unittest.TestCase):
         }
         load_handlers("plugins/endless_elevator/__init__.py", {
             "PendingMenu", "Route", "menu_choice", "_quote_id", "_menu_ref", "_is_old_game_menu",
-            "_parse_menu_input","_MENU_NUM_RE","_MENU_EXTRA_RE","_REPEATABLE_MENU_ACTIONS",
+            "_parse_menu_input","_MENU_NUM_RE","_MENU_EXTRA_RE","_REPEATABLE_MENU_ACTIONS", "_scope",
             "_number_route", "_command_text", "_matches_quoted_menu",
         }, env)
         env["_menus"]["101"] = env["PendingMenu"](
@@ -564,3 +566,80 @@ class MenuTests(unittest.TestCase):
         self.assertIsNone(choose(436, reply=ordinary_help))
         other_group = SimpleNamespace(**{**vars(menu), "group_id": 222})
         self.assertIsNone(choose(436, reply=other_group))
+
+
+class PrivateElevatorMenuTests(unittest.IsolatedAsyncioTestCase):
+    async def test_private_menu_uses_shared_save_and_its_own_numbered_choices(self):
+        area = tempfile.TemporaryDirectory()
+        self.addCleanup(area.cleanup)
+        game = elevator.ElevatorGame(Path(area.name) / "game.sqlite3", rng=Random(17))
+        game.execute("101", "玩家", "321", "rename", "熟悉的乘客")
+        with game.store.transaction() as db:
+            db.execute("UPDATE players SET runs=1 WHERE user_id='101'")
+            db.execute("INSERT INTO inventory(user_id,item_id,quality,value,quantity) "
+                       "VALUES('101','coffee','',300,1)")
+        env = {
+            "game": game, "Choice": elevator.Choice, "Reply": elevator.Reply, "re": re,
+            "GroupMessageEvent": SimpleNamespace, "PrivateMessageEvent": PrivateMessageEvent,
+            "MessageSegment": MessageSegment, "Awaitable": Awaitable, "Callable": Callable,
+            "time": SimpleNamespace(monotonic=lambda: 10.0), "asyncio": asyncio,
+            "_menus": {}, "_menu_refs": {}, "_menu_history": {}, "_locks": {},
+            "GameMaintenance": RuntimeError, "sqlite3": sqlite3, "RUN_TIMEOUT": elevator.RUN_TIMEOUT,
+        }
+        load_handlers("plugins/endless_elevator/__init__.py", {
+            "PendingMenu", "Route", "_quote_id", "_menu_ref", "_scope", "_is_old_game_menu",
+            "_command_text", "_looks_like_loadout", "_parse_menu_input", "menu_choice", "_number_route",
+            "_known_lookup", "private_candidate", "_route", "_format_reply", "handle_private_event",
+            "_handle_route", "_MENU_NUM_RE", "_MENU_EXTRA_RE", "_LOADOUT_KEYWORDS", "_ACTIONS",
+            "_ORDER_CMD_RE", "_EVENT_WORDS", "_PREFIX_ONLY", "_HELP_TOPICS", "_REQUIRES_RUN",
+            "_SUPPORT_ALIAS", "_DEFAULT_ARGUMENTS", "_MUTATING_COMMANDS", "_REPEATABLE_MENU_ACTIONS",
+        }, env)
+
+        def event(text, *, quote=None):
+            message = Message(text)
+            if quote:
+                message.insert(0, MessageSegment.reply(quote))
+            return PrivateMessageEvent(
+                time=1, self_id=999, post_type="message", message_type="private", sub_type="friend",
+                message_id=700, user_id=101, message=message, original_message=message,
+                raw_message=text, font=0, sender={"user_id":101, "nickname":"玩家"},
+            )
+
+        group_choice = env["PendingMenu"]("321", "300", 60, (elevator.Choice("撤离", "extract"),), True)
+        env["_menus"]["101"] = group_choice
+        dispatch = env["handle_private_event"]
+        accept = env["private_candidate"]
+        bot = SimpleNamespace()
+        send = AsyncMock(side_effect=[{"message_id": 301}, {"message_id": 302}, {"message_id": 303}])
+        self.assertFalse(accept(event("做题 1+1")))
+        self.assertFalse(accept(event("帮助文档")))
+        self.assertFalse(accept(event("1")))
+        self.assertFalse(accept(event("1", quote=300)))
+        temporary = SimpleNamespace(message_type="private", user_id=101, group_id=321)
+        self.assertEqual(env["_scope"](temporary), ("private:101", "private:101"))
+        self.assertTrue(await dispatch(bot, event("电梯"), send))
+        self.assertIn("熟悉的乘客", send.await_args.args[0].extract_plain_text())
+        self.assertTrue(await dispatch(bot, event("开局"), send))
+        self.assertFalse(await dispatch(bot, event("1", quote=300), send))
+        self.assertTrue(await dispatch(bot, event("1", quote=302), send))
+        self.assertEqual(send.await_count, 3)
+        self.assertIs(env["_menus"]["101"], group_choice)
+        with game.store.read() as db:
+            private_run = db.execute("SELECT group_id, payload FROM active_runs WHERE user_id='101'").fetchone()
+            self.assertEqual(private_run["group_id"], "private:101")
+        self.assertIn("F1", game.execute("101", "玩家", "321", "help").text)
+
+    def test_private_session_cannot_launch_group_actions_even_inside_an_order(self):
+        area = tempfile.TemporaryDirectory()
+        self.addCleanup(area.cleanup)
+        game = elevator.ElevatorGame(Path(area.name) / "game.sqlite3", rng=Random(17))
+        game.execute("101", "玩家", "321", "rename", "乘客")
+        group_order = game.create_order(
+            "101", "乘客", "321", "求援",
+            [{"action":"flare", "argument":"", "note":"发信号"}],
+        )
+        reply = game.execute("101", "乘客", "private:101", "confirm_order", group_order["order_id"])
+        self.assertIn("已开放电梯的群", reply.text)
+        self.assertIn("全服", game.execute("101", "乘客", "private:101", "rank").text)
+        with game.store.read() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM signals").fetchone())

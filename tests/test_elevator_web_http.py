@@ -56,6 +56,62 @@ class ElevatorWebIntegration(unittest.TestCase):
         self.assertEqual(html.headers["Cache-Control"],"no-store")
         self.assertFalse(self.web.get(API+"/maintenance").json()["paused"])
 
+    def test_public_rtc_offer_requires_the_bound_trial_account(self):
+        trial = TestClient(
+            create_app(self.game_db, self.auth.path, public_origin="https://elevator.example.test",
+                       rtc_port=8093, rtc_player=self.qq),
+            base_url="https://elevator.example.test",
+        )
+        self.addCleanup(trial.close)
+        route = API+"/rtc/offer"
+        offer = {"type":"offer","sdp":"test"}
+        self.assertEqual(trial.post(route,json=offer,headers=self.headers).status_code,401)
+        self.assertIn("/static/rtc.js?v=",trial.get("/elevator/").text)
+        for qq, name in (("2345678","other"),(self.qq,"operator")):
+            account = self.auth.register(name,"sample-password!",qq)
+            self.auth.confirm(account["challenge"]["code"],qq,group_id=self.group)
+            trial.cookies.set("elevator_session",account["session"])
+            view = trial.get(API+"/auth/session").json()["account"]
+            self.assertEqual(view.get("rtc_trial",False),qq == self.qq)
+            with patch("elevator_web.http.client.HTTPConnection") as local:
+                response = local.return_value.getresponse.return_value
+                response.status = 200
+                response.read.return_value = b'{"type":"answer","sdp":"test-answer"}'
+                code = trial.post(route,json=offer,headers=self.headers)
+                if qq == self.qq:
+                    self.assertEqual(code.json(),{"type":"answer","sdp":"test-answer"})
+                    body = local.return_value.request.call_args.args[2]
+                    self.assertIn(account["session"],body.decode())
+                else:
+                    self.assertEqual(code.status_code,403)
+                    local.assert_not_called()
+            self.assertEqual(trial.post(route,json=offer,headers={"Origin":"https://elsewhere.example.test"})
+                             .status_code,403)
+
+    def test_rtc_public_accepts_all_bound_accounts(self):
+        site = "https://elevator.example.test"
+        public = TestClient(
+            create_app(self.game_db, self.auth.path, public_origin=site, rtc_port=8093, rtc_public=True),
+            base_url=site,
+        )
+        self.addCleanup(public.close)
+        route = API+"/rtc/offer"
+        offer = {"type":"offer", "sdp":"test"}
+        self.assertEqual(public.post(route, json=offer, headers=self.headers).status_code, 401)
+        with patch("elevator_web.http.client.HTTPConnection") as local:
+            response = local.return_value.getresponse.return_value
+            response.status = 200
+            response.read.return_value = b'{"type":"answer","sdp":"test-answer"}'
+            for qq, name in ((self.qq,"operator"),("2345678","another")):
+                account = self.auth.register(name, "sample-password!", qq)
+                public.cookies.set("elevator_session", account["session"])
+                self.assertNotIn("rtc_trial", public.get(API+"/auth/session").json()["account"])
+                self.assertEqual(public.post(route, json=offer, headers=self.headers).status_code, 403)
+                self.auth.confirm(account["challenge"]["code"], qq, group_id=self.group)
+                self.assertTrue(public.get(API+"/auth/session").json()["account"]["rtc_trial"])
+                self.assertEqual(public.post(route, json=offer, headers=self.headers).status_code, 200)
+        self.assertEqual(local.return_value.request.call_count, 2)
+
     def test_client_delta_rebuilds_full_state_and_stale_commands_resync(self):
         self.bind()
         self.post("/game/command",{"command":"start","params":{"map_id":"mall"},
@@ -87,6 +143,66 @@ class ElevatorWebIntegration(unittest.TestCase):
         missed=self.post("/game/command",{"command":"rush_settings","params":{"floors":5,"skip_valuable":True},
                          "revision":rebuilt["revision"]}, headers={**headers,"X-Elevator-Base":"expired-token"})
         self.assertIn("state",missed.json())
+
+    def test_rush_settings_are_shared_and_older_requests_preserve_the_new_choices(self):
+        self.bind()
+        state = self.web.get(API+"/game/state").json()
+        self.assertEqual(state["player"]["rush_event_mode"], "pause")
+        self.assertIs(state["player"]["rush_auto_elite"], False)
+
+        def settings(state, **options):
+            return self.post("/game/command", {
+                "command": "rush_settings", "params": {"floors": 5, "skip_valuable": True, **options},
+                "revision": state["revision"],
+            })
+
+        changed = settings(state, event_mode="random", auto_elite=True)
+        self.assertEqual(changed.status_code, 200)
+        changed = changed.json()["state"]
+        self.assertEqual(changed["player"]["rush_event_mode"], "random")
+        self.assertIs(changed["player"]["rush_auto_elite"], True)
+        self.assertNotEqual(changed["revision"], state["revision"])
+
+        old_client = settings(changed, floors=3).json()["state"]
+        self.assertEqual(old_client["player"]["rush_floors"], 3)
+        self.assertEqual(old_client["player"]["rush_event_mode"], "random")
+        self.assertIs(old_client["player"]["rush_auto_elite"], True)
+        one_setting = self.post("/game/command", {
+            "command": "rush_settings", "params": {"event_mode": "pause"},
+            "revision": old_client["revision"],
+        }).json()["state"]
+        self.assertEqual(one_setting["player"]["rush_floors"], 3)
+        self.assertIs(one_setting["player"]["rush_skip_valuable"], True)
+        self.assertIs(one_setting["player"]["rush_auto_elite"], True)
+        for invalid in ({"event_mode": ["ignore"]}, {"event_mode": "bogus"}, {"auto_elite": 1}):
+            self.assertEqual(settings(one_setting, **invalid).status_code, 422)
+
+        game = rules.ElevatorGame(self.game_db)
+        game.execute(self.qq, "网页乘客", self.group, "rush_settings", "无视奇遇 遇精英暂停")
+        stale = settings(one_setting)
+        self.assertEqual(stale.status_code, 409)
+        restored = stale.json()["state"]["player"]
+        self.assertEqual(restored["rush_event_mode"], "ignore")
+        self.assertIs(restored["rush_auto_elite"], False)
+
+    def test_rush_response_keeps_skipped_event_receipts_for_each_floor(self):
+        self.bind()
+
+        def command(name, **params):
+            revision = self.web.get(API+"/game/state").json()["revision"]
+            response = self.post("/game/command", {"command": name, "params": params, "revision": revision})
+            self.assertEqual(response.status_code, 200)
+            return response.json()
+
+        command("start", map_id="mall")
+        command("rush_settings", floors=3, skip_valuable=True, event_mode="ignore", auto_elite=True)
+        with patch.object(rules.Turn, "_event_roll", return_value="choice"):
+            receipt = command("rush")["result"]["rush"]["floors"]
+        self.assertEqual([entry["floor"] for entry in receipt], [2, 3, 4])
+        for entry in receipt:
+            self.assertEqual(entry["adventure"]["outcome"], "ignored")
+            self.assertTrue(entry["adventure"]["name"])
+            self.assertEqual(entry["adventure"]["loot"], [])
 
     def test_lost_reply_crosses_qq_and_web_without_spending_twice(self):
         self.bind()

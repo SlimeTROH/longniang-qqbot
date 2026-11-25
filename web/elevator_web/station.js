@@ -12,6 +12,7 @@ const expeditionMoves = {
   leave: ["离开", ""],
 };
 const localMoves = new Set(["bag", "field", "battle_log", "save_box", "swap_box", "use"]);
+const adventureOutcomes = { success: "成功", failure: "失败", ignored: "已无视" };
 
 function gameControl(label, command, params = {}) {
   return { label, action: command, control: { command, params } };
@@ -216,7 +217,7 @@ function adventureDetails(adventure) {
   const floors = adventure.floor == null ? "" : "F" + format(adventure.floor);
   const destination = floors && adventure.destination != null && adventure.destination !== adventure.floor
     ? floors + " 到 F" + format(adventure.destination) : floors;
-  const result = { success: "成功", failure: "失败" }[adventure.outcome];
+  const result = adventureOutcomes[adventure.outcome];
   const lines = (adventure.lines || []).filter(line => typeof line === "string" && line.trim());
   return [
     node("h2", { text: adventure.name || "奇遇结算" }),
@@ -259,7 +260,13 @@ function stationSettlement(run) {
       node("ol", {className:"settlement-lines"}, ...rush.floors.map(row => {
         const loot = [...row.loot.map(item=>item.name), ...row.field];
         const battle = row.battle;
-        return node("li",{text:[`F${row.floor}`, battle ? `${battle.enemy} · ${battle.rounds} 回合 · 造成 ${battle.dealt} / 承受 ${battle.taken}` : row.title,
+        const adventure = row.adventure;
+        const encounter = [
+          battle ? `${battle.enemy} · ${battle.rounds} 回合 · 造成 ${battle.dealt} / 承受 ${battle.taken}` : "",
+          adventure ? [adventure.name, adventure.outcome === "ignored" ? "" : adventure.option, adventureOutcomes[adventure.outcome],
+            ...(adventure.lines || [])].filter(Boolean).join(" · ") : "",
+        ].filter(Boolean).join(" · ");
+        return node("li",{text:[`F${row.floor}`, encounter || row.title,
           loot.length ? "拾取 "+loot.join("、") : ""].filter(Boolean).join(" · ")});
       }))) : null,
     battle ? node("section", { className: "panel settlement-card", "aria-label": "战斗结算" }, ...battleDetails(battle)) : null,
@@ -363,6 +370,8 @@ function renderScene() {
     ? `📡 热成像雷达 · F${run.radar_scan.floor} 侦测到「${run.radar_scan.room}」`
     : run ? run.next_floor || `下个首领在 F${run.next_boss}` : "每局消耗 1 张通行证。模拟免费。";
   $("rush-floors").value = String(player.rush_floors || 3);
+  $("rush-event").value = player.rush_event_mode || "pause";
+  $("rush-auto-elite").checked = Boolean(player.rush_auto_elite);
   $("rush-skip").checked = Boolean(player.rush_skip_valuable);
   $("floor-display").querySelector("strong").textContent = run ? format(run.floor) : "G";
   $("station-vitals").hidden = !run;

@@ -8,7 +8,10 @@ from network_config import configure_process_proxy
 configure_process_proxy()
 
 import nonebot
+from nonebot.adapters.onebot.v11 import Bot, PrivateMessageEvent
 from nonebot.log import default_format, logger
+from nonebot.matcher import Matcher
+from nonebot.rule import Rule
 from onebot_guard import Adapter as ONEBOT_V11Adapter
 
 # 初始化 NoneBot
@@ -40,6 +43,25 @@ def _private_admins() -> set[str]:
 
 
 driver.register_adapter(ONEBOT_V11Adapter, private_admins=_private_admins)
+
+
+def _is_private_elevator(bot: Bot, event: PrivateMessageEvent) -> bool:
+    adapter = bot.adapter
+    return isinstance(adapter, ONEBOT_V11Adapter) and adapter.uses_private_elevator(event)
+
+
+_private_elevator = nonebot.on_message(rule=Rule(_is_private_elevator), priority=-1, block=False)
+
+
+@_private_elevator.handle()
+async def _route_private_elevator(bot: Bot, event: PrivateMessageEvent, matcher: Matcher) -> None:
+    adapter = bot.adapter
+    if isinstance(adapter, ONEBOT_V11Adapter):
+        if not adapter._allows_private_peer(event.user_id):
+            matcher.stop_propagation()
+        if await adapter.dispatch_private_elevator(bot, event):
+            matcher.stop_propagation()
+
 
 @driver.on_shutdown
 async def _close_network_clients() -> None:

@@ -177,7 +177,7 @@ function chooseAuth(mode) {
 
 async function applySession(account, initial = null) {
   ui.account = account;
-  window.ElevatorRTC?.setAccount(account?.bound ? account.username : "");
+  window.ElevatorRTC?.setAccount(account?.rtc_trial ? account.username : "");
   $("loading").hidden = true;
   $("gate").hidden = Boolean(account?.bound);
   $("game").hidden = !account?.bound;
@@ -789,6 +789,7 @@ function setup() {
     event.preventDefault();
     perform(gameControl("保存连战设置", "rush_settings", {
       floors: Number($("rush-floors").value), skip_valuable: $("rush-skip").checked,
+      event_mode: $("rush-event").value, auto_elite: $("rush-auto-elite").checked,
     }), { inline: true });
   });
   scheduleMaintenanceCheck();

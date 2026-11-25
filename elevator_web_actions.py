@@ -12,7 +12,7 @@ _PARAMETERS = {
     "start": ("map_id", "supplies", "nickname"),
     "simulate": ("map_id", "nickname"),
     "rush": ("floors",),
-    "rush_settings": ("floors", "skip_valuable"),
+    "rush_settings": ("floors", "skip_valuable", "event_mode", "auto_elite"),
     "event": ("option",),
     "save_box": ("index",),
     "swap_box": ("index", "safe_index"),
@@ -35,6 +35,7 @@ _PARAMETERS = {
 # QQ chat-flood penalty, whereas summons and commercial actions keep their cooldowns.
 QUICK_COMMANDS = frozenset({"down", "rush", "fight", "flee", "extract", "event", "leave", "save_box", "swap_box", "take_box", "use", "field_use", "field_pick", "field_remove"})
 _ID = re.compile(r"[a-z][a-z0-9_]{0,47}")
+_RUSH_EVENT_COMMANDS = {"pause": "遇奇遇暂停", "random": "随机奇遇", "ignore": "无视奇遇"}
 
 
 def check_command(name: str, params: dict) -> None:
@@ -125,11 +126,28 @@ def prepare(turn, name: str, params: dict, error) -> tuple[str, str]:
     if name == "rush":
         return name, str(_count(params, "floors", 10, turn.rush_floors))
     if name == "rush_settings":
-        floors = _count(params, "floors", 10)
-        skip = params.get("skip_valuable")
-        if floors not in (3,5,10) or type(skip) is not bool:
-            raise ValueError("请选择 3、5 或 10 层，并指定是否跳过金红暂停。")
-        return name, f"{floors} " + ("跳过金红" if skip else "遇金红暂停")
+        settings = []
+        if "floors" in params:
+            floors = _count(params, "floors", 10)
+            if floors not in (3, 5, 10):
+                raise ValueError("请选择 3、5 或 10 层。")
+            settings.append(str(floors))
+        if "skip_valuable" in params:
+            skip = params["skip_valuable"]
+            if type(skip) is not bool:
+                raise ValueError("请指定是否跳过金红暂停。")
+            settings.append("跳过金红" if skip else "遇金红暂停")
+        if "event_mode" in params:
+            mode = params["event_mode"]
+            if not isinstance(mode, str) or mode not in _RUSH_EVENT_COMMANDS:
+                raise ValueError("请选择遇到奇遇时停下、随机选择或无视。")
+            settings.append(_RUSH_EVENT_COMMANDS[mode])
+        if "auto_elite" in params:
+            auto_elite = params["auto_elite"]
+            if type(auto_elite) is not bool:
+                raise ValueError("请指定是否自动打精英怪。")
+            settings.append("自动打精英" if auto_elite else "遇精英暂停")
+        return name, " ".join(settings)
     if name == "event":
         return name, str(_count(params, "option", 100))
     if name == "rename":

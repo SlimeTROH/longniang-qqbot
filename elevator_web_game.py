@@ -102,7 +102,8 @@ def _revision(turn, records, key: bytes) -> str:
     row, stock, gear, group = records
     # Fingerprint actual persisted payload: legacy runs hydrate field seeds on read.
     snapshot = [turn.gid, turn.day, turn.player, list(row) if row else None, stock,
-                [entry.item for entry in gear], turn.archives, group, turn.rush_floors, turn.rush_skip_valuable]
+                [entry.item for entry in gear], turn.archives, group, turn.rush_floors, turn.rush_skip_valuable,
+                turn.rush_event_mode, turn.rush_auto_elite]
     data = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hmac.digest(key, data.encode("utf-8"), "sha256").hex()
 
@@ -459,6 +460,7 @@ def _snapshot(turn, records, revision: str) -> dict:
             "name_confirmed": bool(p["name_confirmed"]), "ticket_cap": turn.ticket_cap,
             "paid_ticket_cap": expedition.TICKET_PAID_CAP,
             "rush_floors": turn.rush_floors, "rush_skip_valuable": turn.rush_skip_valuable,
+            "rush_event_mode": turn.rush_event_mode, "rush_auto_elite": turn.rush_auto_elite,
             "loadout": json.loads(p["loadout"]), "stats": stats, "stat_sources":sources,
             "secondary":rules.combat.secondary_stats(sheet, in_run=bool(run),
                                                     escape_blocked=bool(own_signal or sheet.get("field_offer"))),
@@ -586,6 +588,8 @@ def _command_result(command, state, turn, old_floor, old_hp, old_gold) -> dict:
             outcome, title = "simulation_complete", "演练结束"
         elif departure["extracted"]:
             outcome, title = "extracted", "安全撤离"
+        elif departure.get("protected_by_doll"):
+            outcome, title = "failed", "战败，替身保全"
         else:
             outcome, title = "failed", "探索失败"
         reward = f"估值 {departure['value']:,} 金" if departure["simulation"] else f"保住 {departure['value']:,} 金物资"
@@ -615,7 +619,8 @@ def _command_result(command, state, turn, old_floor, old_hp, old_gold) -> dict:
         "rush": {"reason":rush["reason"], "floors":[
             {"floor":row["floor"], "title":row["title"], "loot":_earned_loot(turn.catalog,row["loot"]),
              "field":[turn.catalog.field_items[k]["name"] for k in row.get("field",{})],
-             "battle":_settlement(turn.catalog,row.get("battle"))} for row in rush["floors"]
+             "battle":_settlement(turn.catalog,row.get("battle")),
+             "adventure":_settlement(turn.catalog,row.get("adventure"))} for row in rush["floors"]
         ]} if rush else None,
         "battle": battle, "adventure": adventure, "departure": departure,
     }

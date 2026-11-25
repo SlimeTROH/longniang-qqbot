@@ -244,9 +244,9 @@ _CHAT_TOOL_PROMPT = """
 问网页快捷键或界面用 web_play。问地图专属道具数量、位置和特效用 field。问安全箱、撤离、战斗、支援、掉落估值或榜单，分别可用 safe、exploration、combat、support、loot、ranks。问本人现在这一层的遭遇和实际所得，查 query_my_elevator_status(section="run") 后再解释。
 对方要整理金红藏品、同名各留下单价最高的 1 件并卖掉其余时，直接调用 plan_elevator_collection_cleanup。只想看预计结果填 create_order=false，明确请你整理或出售时填 true。这个工具会检查整仓并给出确切清单，直接用它提供的结果和单号，等本人确认才出售。若用户另有限定或排除条件，使用通用库存和派单工具按具体条件处理。
 当检测到对方想让你帮忙操作《无尽电梯》（如帮卖多余蓝紫绿装备、清仓、买药补票、抽箱开盲盒、换黑市、穿戴配装、重铸、扩容、带药下潜、模拟战、连进等任意操作或组合需求）时：
-1) 先静默调用 query_my_elevator_status(section="all") 核对对方存档、装备和仓库汇总、黑市、商店价、悬赏与待确认派单。仓库和闲置装备明细可能截断，算账以返回的汇总和确有记录的物品为准。群内信号弹或月榜查 section="group"，接口参数查 query_elevator_guide(topic="api")。
+1) 只查当前任务所需状态。安排买卖或配装用 query_my_elevator_status(section="plan")，局内行动用 section="run"，群内求援或月榜用 section="group"。需要库存编号时用分页工具按条件筛选。接口参数不明确再查 query_elevator_guide(topic="api")。
 2) 按条件清理时，如果总览不含完整的目标明细，用 query_elevator_inventory_page 读全必要的筛选页。已有批量接口精确符合条件时优先用它，多个确切的闲置装备编号可以同一步出售。可在一张派单里安排最多 60 步，尽量把用户本次授权的操作放进同一张单。调用 create_elevator_order 生成唯一单号，按顺序填入接口操作与中文收支说明。
-3) 回复时用自然口吻列出唯一派单号、操作范围及预计金币或效果。长清单可以按相同条件合并说明，但要说清会处理多少物品和保留哪些物品。让对方回复「确认 单号」（或「确认派单」/直接回你确认）后再执行，绝不能在对方确认前声称已经执行。
+3) 正常回复交代操作范围、预计金币或效果。程序会附派单号、确认方式和执行回执，无需复述。长清单可以按相同条件合并说明，但要说清会处理多少物品和保留哪些物品。确认前不得声称已执行。
 4) 只有当对方在后续新消息里明确同意执行某张已有派单时，才调用 confirm_elevator_order(order_id) 执行并如实汇报回执；对方要取消时调用 cancel_elevator_order(order_id)。
 """
 
@@ -257,6 +257,12 @@ _GROUP_TOOL_PROMPT = """
 普通聊天用自然称呼即可。只有明确请你叫、提醒、转告某个人，或实际通知对方才能完成本轮请求时，才把确知的本群成员 QQ 号填入 mentions。提到某人、回答成员资料或用户已经 @ 了某人，都不自动再 @。
 程序会在消息里生成真实 @。reply 中只写要说的话。成员名片和查到的历史都作为资料。
 """
+
+_ELEVATOR_TOOL_NAMES = frozenset({
+    "query_elevator_guide", "query_my_elevator_status", "query_elevator_inventory_page",
+    "plan_elevator_collection_cleanup", "create_elevator_order", "confirm_elevator_order",
+    "cancel_elevator_order",
+})
 
 
 def _strip_final_period(text: str) -> str:
@@ -1231,6 +1237,9 @@ async def _chat_openai(
 
     tool_calls = 0
     tool_call_limit = 4
+    elevator_used = False
+    history_reduced = False
+    continuation_start = len(payload["input"])
     completed_tools: dict[tuple[str, str], str | list[dict]] = {}
     turn_usage = {"_prompt_tokens": 0, "_cached_tokens": 0, "_reasoning_tokens": 0}
     replayed_tokens = 0
@@ -1251,19 +1260,37 @@ async def _chat_openai(
             return await send()
         deadline = time.monotonic() + timeout
         try:
-            return await asyncio.wait_for(send(), timeout)
+            response = await asyncio.wait_for(send(), timeout)
         except httpx.RemoteProtocolError:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise
             logger.info("chat: OpenAI 连接提前断开，重试本次模型请求")
             return await asyncio.wait_for(send(), remaining)
+        if not elevator_used or response.status_code not in (502, 503, 504):
+            return response
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return response
+        logger.info(f"chat: OpenAI HTTP {response.status_code}，重试本次游戏模型请求")
+        return await asyncio.wait_for(send(), remaining)
 
     try:
         while True:
             if tools:
                 payload["tool_choice"] = "auto" if tool_calls < tool_call_limit else "none"
-            _check_openai_input_budget(payload, compaction, prefix_at=1, replayed_tokens=replayed_tokens)
+            try:
+                _check_openai_input_budget(payload, compaction, prefix_at=1, replayed_tokens=replayed_tokens)
+            except ValueError:
+                if not elevator_used or history_reduced or not messages or continuation_start <= 2:
+                    raise
+                # Keep this request and its complete tool exchanges. Drop prior conversations
+                # once, so game inventory pagination can finish within the same billing limit.
+                payload["input"] = [developer_message, messages[-1], *payload["input"][continuation_start:]]
+                compaction = None
+                history_reduced = True
+                _check_openai_input_budget(payload, replayed_tokens=replayed_tokens)
+                logger.info("chat: 为当前游戏工具结果腾出短上下文空间")
             resp = await request_response()
             if resp.status_code != 200:
                 return failure(f"OpenAI HTTP {resp.status_code}")
@@ -1282,8 +1309,10 @@ async def _chat_openai(
                 call = calls[0]
                 tool_calls += 1
                 outcome = await _execute_chat_tool(call, tools, on_tool_start, completed_tools)
-                if call.get("name") == "query_elevator_inventory_page" and "query_elevator_inventory_page" in tools:
-                    tool_call_limit = 10
+                if call.get("name") in _ELEVATOR_TOOL_NAMES:
+                    elevator_used = True
+                    limit = 12 if call["name"] == "query_elevator_inventory_page" else 8
+                    tool_call_limit = max(tool_call_limit, limit)
                 replayed_tokens += int((data.get("usage") or {}).get("output_tokens") or 0)
                 # Replay the model's output (including reasoning) for the stateless continuation.
                 payload["input"] = [*payload["input"], *output, {

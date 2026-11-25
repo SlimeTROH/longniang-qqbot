@@ -49,7 +49,7 @@ ITEM_BRIEFS = {
     "warp_card": "非战斗刷卡直降 2 层，跳过风险并侦察下层",
     "magnet": "本局后续新摸物资估值 +25%，并立刻白摸 1 箱",
     "pouch": "本局安全箱临时 +1 格",
-    "doll": "揣包里自动触发：翻车时替死并连人带包拉回地面",
+    "doll": "遭遇致命伤害时自动消耗，带回物资，按战败结算",
     "vip_card": "刷卡直通下一层无怪隐藏金库，连开 3 个高爆箱",
     "reroll_stone": "重铸装备词条时优先消耗，可替代 1 件蓝色材料",
     "crate_blue": "带回大厅发「解码」开奖，出大金/装备/替身娃娃",
@@ -105,6 +105,7 @@ COMMANDS = {
 }
 
 OPEN_AI_COMMANDS = frozenset(k for k in COMMANDS if k not in {"confirm_order", "cancel_order"})
+_GROUP_ONLY_ACTIONS = frozenset({"flare", "support", "blessing"})
 FIELD_CHOICE_FIRST = frozenset({"down", "rush", "fight", "flee", "extract", "event", "rob", "rescue", "leave", "flare"})
 ORDER_TTL = 600
 ORDER_STEP_LIMIT = 60
@@ -519,8 +520,9 @@ class Turn:
             (uid, name),
         )
         self.player = dict(db.execute("SELECT * FROM players WHERE user_id=?", (uid,)).fetchone())
-        pref = db.execute("SELECT floors,skip_valuable FROM rush_preferences WHERE user_id=?", (uid,)).fetchone()
+        pref = db.execute("SELECT floors,skip_valuable,event_mode,auto_elite FROM rush_preferences WHERE user_id=?", (uid,)).fetchone()
         self.rush_floors, self.rush_skip_valuable = (pref[0], bool(pref[1])) if pref else (3, False)
+        self.rush_event_mode, self.rush_auto_elite = (pref[2], bool(pref[3])) if pref else ("pause", False)
         self.archives = {
             row["item_id"]: row["count"] for row in db.execute("SELECT item_id,count FROM collections WHERE user_id=?", (uid,))
         }
@@ -579,7 +581,7 @@ class Turn:
             is_sim = bool(self.run.get("sim"))
             text = self.finish_run(True, "久等没动静，电梯自动把你拉回了地面")
             if not is_sim:
-                self.notice(self.uid, text.splitlines()[0] + " 东西都帮你收进仓库了。")
+                self.notice(self.uid, "\n".join(text.splitlines()[:2]))
         self.persist(touch=False)
 
     def notice(self, user_id: str, body: str) -> None:
@@ -669,9 +671,16 @@ class Turn:
                 text = text + "\n" + summary
         if options is None:
             options = self.actions()
+        if self.gid.startswith("private:"):
+            options = tuple(choice for choice in options if choice.action not in _GROUP_ONLY_ACTIONS)
         return Reply(text, options, bool(self.run) if plain is None else plain, **kwargs)
 
     def execute_action(self, action: str, argument: str, target: str, *, confirmed_order: bool = False) -> Reply:
+        if self.gid.startswith("private:"):
+            if action in _GROUP_ONLY_ACTIONS:
+                raise GameError("求援、支援和金雨祈福请在已开放电梯的群里使用。")
+            if action == "rank":
+                action = "all_rank"
         if action == "curate_collectibles" and not confirmed_order:
             raise GameError("请先生成藏品清理派单，再由本人确认执行。")
         if action in FIELD_CHOICE_FIRST and self.run and self.run.get("field_offer"):
@@ -1346,24 +1355,68 @@ class Turn:
         return self.reply(self._enter_floor())
 
     def rush_settings(self, text: str, _target: str) -> Reply:
-        floors, skip = self.rush_floors, self.rush_skip_valuable
+        event_modes = {"遇奇遇暂停": "pause", "随机奇遇": "random", "无视奇遇": "ignore"}
+        previous = (self.rush_floors, self.rush_skip_valuable, self.rush_event_mode, self.rush_auto_elite)
+        floors, skip, event_mode, auto_elite = previous
         for part in text.strip().split():
             if part in ("3","5","10"):
                 floors = int(part)
             elif part in ("跳过金红","遇金红暂停"):
                 skip = part == "跳过金红"
+            elif part in event_modes:
+                event_mode = event_modes[part]
+            elif part in ("自动打精英", "遇精英暂停"):
+                auto_elite = part == "自动打精英"
             else:
-                raise GameError("可选 3、5、10 层，以及「跳过金红」或「遇金红暂停」。")
-        if (floors,skip) != (self.rush_floors,self.rush_skip_valuable):
-            self.db.execute("INSERT INTO rush_preferences VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE "
-                            "SET floors=excluded.floors,skip_valuable=excluded.skip_valuable", (self.uid,floors,int(skip)))
-            self.rush_floors,self.rush_skip_valuable = floors,skip
+                raise GameError("发「连战设置」查看层数、金红、奇遇和精英选项。")
+        settings = floors, skip, event_mode, auto_elite
+        if settings != previous:
+            self.db.execute("""
+                INSERT INTO rush_preferences(user_id,floors,skip_valuable,event_mode,auto_elite) VALUES(?,?,?,?,?)
+                ON CONFLICT(user_id) DO UPDATE SET floors=excluded.floors,skip_valuable=excluded.skip_valuable,
+                    event_mode=excluded.event_mode,auto_elite=excluded.auto_elite
+            """, (self.uid, *settings))
+            self.rush_floors, self.rush_skip_valuable, self.rush_event_mode, self.rush_auto_elite = settings
         mode = "跳过金红" if skip else "遇金红暂停"
         toggle = "遇金红暂停" if skip else "跳过金红"
-        return self.reply(f"连战 {floors} 层 · {mode}。遇精英、首领先停。", (
+        event_label = next(label for label, value in event_modes.items() if value == event_mode)
+        elite_label = "自动打精英" if auto_elite else "遇精英暂停"
+        elite_toggle = "遇精英暂停" if auto_elite else "自动打精英"
+        return self.reply(f"连战 {floors} 层 · {mode} · {event_label} · {elite_label}。遇首领暂停。\n"
+                          "随机奇遇可能花金币或损血。", (
             *(Choice(f"{n} 层","rush_settings",str(n)) for n in (3,5,10)),
             Choice(toggle,"rush_settings",toggle),
-        ), plain=True, count_cooldown=False)
+            *(Choice(label, "rush_settings", label) for label in event_modes if label != event_label),
+            Choice(elite_toggle, "rush_settings", elite_toggle),
+        ), plain=True, multiline_menu=True, count_cooldown=False)
+
+    def _rush_adventure(self, floor_limit: int, row: dict) -> str:
+        run = self.run
+        pending = run["event"]
+        event = self.catalog.events[pending["id"]]
+        floor = run["floor"]
+        if self.rush_event_mode == "random":
+            budget = run["sim_gold"] if run.get("sim") else self.player["gold"]
+            eligible = []
+            for i, option in enumerate(event["choices"], 1):
+                cost = option.get("cost", 0) + (pending["price"] if option.get("buy_offer") else 0)
+                distance = option.get("skip_floors", 0)
+                if cost <= budget and (not distance or expedition.landing(floor, distance) <= floor_limit):
+                    eligible.append(i)
+            if eligible:
+                chosen = self.rng.choice(eligible)
+                report = self.event_choice(str(chosen), "", enter_landing=False)
+                row["adventure"] = self.last_adventure
+                option = event["choices"][chosen-1]["label"]
+                return f"F{floor} · 随机选择「{option}」\n{report.text}"
+        reason = "按连战设置无视。" if self.rush_event_mode == "ignore" else "可选项余额不足或会超过本次连战层数。"
+        self.last_adventure = {
+            "name": event["name"], "option": "无视奇遇", "floor": floor, "destination": floor,
+            "outcome": "ignored", "lines": [reason], "loot": [],
+        }
+        run["adventure"] = row["adventure"] = self.last_adventure
+        self._clear_event()
+        return f"F{floor} · 略过「{event['name']}」 · {reason}"
 
     def rush(self, text: str, _target: str) -> Reply:
         run = self._check_run()
@@ -1373,28 +1426,39 @@ class Turn:
             raise GameError("连战最多 10 层，发「连战设置」可选 3、5、10 层。")
         steps = int(text) if text else self.rush_floors
         first = run["floor"]+1
+        floor_limit = run["floor"] + steps
         lines = []
         self.last_rush = {"floors": [], "reason": "达到所选层数"}
-        for step in range(steps):
-            if step and run["hp"]*2<=run["stats"]["hp"]:
-                self.last_rush["reason"] = "生命不超过 50%"
-                lines.append("⚠️ 生命 ≤50%，已暂停。")
-                break
-            run["floor"] += 1
+        jumped = stop_after_landing = False
+        while jumped or run["floor"] < floor_limit:
+            low_health = run["hp"]*2 <= run["stats"]["hp"]
+            if not jumped:
+                if self.last_rush["floors"] and low_health:
+                    self.last_rush["reason"] = "生命不超过 50%"
+                    lines.append("⚠️ 生命 ≤50%，已暂停。")
+                    break
+                run["floor"] += 1
+            floor = run["floor"]
+            jumped = False
             before=len(run["bag"])
             body=self._enter_floor()
-            self.last_rush["floors"].append(self._floor_result())
+            row = self._floor_result()
+            self.last_rush["floors"].append(row)
             if run.get("field_offer"):
                 enemy = run["event"].get("enemy", {})
                 encounter = "遇到首领，" if enemy.get("boss") else "遇到精英，" if enemy.get("elite") else ""
                 self.last_rush["reason"] = encounter + "待选择临装"
                 lines.append(body)
                 break
+            if stop_after_landing:
+                lines.append(body)
+                break
             kind=run["event"]["kind"]
             if kind=="combat":
                 enemy=run["event"]["enemy"]
-                if enemy.get("boss") or enemy["elite"] or run["hp"]*2<=run["stats"]["hp"]:
-                    self.last_rush["reason"] = "遇到首领" if enemy.get("boss") else "遇到精英" if enemy["elite"] else "生命不超过 50%"
+                stop_elite = enemy["elite"] and not self.rush_auto_elite
+                if enemy.get("boss") or stop_elite or run["hp"]*2<=run["stats"]["hp"]:
+                    self.last_rush["reason"] = "遇到首领" if enemy.get("boss") else "遇到精英" if stop_elite else "生命不超过 50%"
                     lines.append(body)
                     break
                 note=self._fight(enemy).text
@@ -1408,6 +1472,17 @@ class Turn:
                     self.last_rush["reason"] = "战斗平手"
                     lines.append("本场平手，已暂停。")
                     break
+            elif kind == "choice" and self.rush_event_mode != "pause":
+                if run["hp"]*2 <= run["stats"]["hp"]:
+                    self.last_rush["reason"] = "生命不超过 50%"
+                    lines.append(body)
+                    break
+                lines.append(self._rush_adventure(floor_limit, row))
+                lines.extend(line for line in body.splitlines() if "拾到局内道具" in line)
+                if not self.run:
+                    self.last_rush["reason"] = "本局已结算"
+                    break
+                jumped = run["floor"] != floor
             else:
                 lines.append(body)
                 if kind!="ready":
@@ -1416,12 +1491,17 @@ class Turn:
             if not self.rush_skip_valuable and any(self.catalog.rarity(it) in ("gold","red") for it in run["bag"][before:]):
                 self.last_rush["reason"] = "拾到金红物资"
                 lines.append("✨ 获得高价值物资，已暂停，可先存箱。")
-                break
+                if not jumped:
+                    break
+                stop_after_landing = True
             info=self.catalog.maps[run["map"]]
-            if info["ambush_rate"] and run["floor"]==info["ambush_floor"] and run["combat_cleared_floor"]!=run["floor"]:
+            if (not stop_after_landing and info["ambush_rate"] and floor==info["ambush_floor"]
+                    and run["combat_cleared_floor"]!=floor):
                 self.last_rush["reason"] = "抵达伏击起始层"
                 lines.append("⚠️ 已到撤离伏击起始层，先决定去留。")
-                break
+                if not jumped:
+                    break
+                stop_after_landing = True
         return self.reply(f"⚡ 连进 F{first} → F{run['floor']}\n"+"\n".join(lines))
 
     def _signal_active(self) -> bool:
@@ -1636,11 +1716,14 @@ class Turn:
             index = next((index for index, item in enumerate(inventory) if item["id"] == "doll"), None)
             if index is not None:
                 inventory.pop(index)
-                return self.finish_run(True, "替身娃娃替你扛下致命一击、趁乱拉闸")
+                return self.finish_run(False, protected_by_doll=True)
         return self.finish_run(False)
 
-    def finish_run(self, extracted: bool, reason: str = "", *, forfeit_safe: bool = False) -> str:
+    def finish_run(self, extracted: bool, reason: str = "", *,
+                   forfeit_safe: bool = False, protected_by_doll: bool = False) -> str:
         run = self.run
+        if extracted and run["hp"] <= 0:
+            return self.fallen()
         if run.get("sim"):
             self._release_relic()
             self.db.execute("DELETE FROM signals WHERE owner_id=?", (self.uid,))
@@ -1648,7 +1731,7 @@ class Turn:
             sim_items = [] if forfeit_safe else [it for it in (*run["safe"], *run["bag"]) if not it.get("sim_kit")]
             val = self._value(sim_items)
             self.last_departure = {"floor": run["floor"], "extracted": extracted, "simulation": True,
-                                   "units": len(sim_items), "value": val}
+                                   "units": len(sim_items), "value": val, "protected_by_doll": protected_by_doll}
             if extracted:
                 lead = f"{reason}，" if reason else "模拟舱门合上，"
                 head = f"🧪 【模拟战结束】{lead}止步第 {run['floor']} 层（剩 {run['hp']}/{run['stats']['hp']} HP）"
@@ -1658,16 +1741,16 @@ class Turn:
         bag, safe = run["bag"], run["safe"]
         insured = self.player["runs"] <= 3 and not forfeit_safe
         recovered = [] if forfeit_safe else safe
-        if extracted or insured:
+        if extracted or insured or protected_by_doll:
             recovered = [*safe, *bag]
-        fold = run["perks"].get("fold", 0) if extracted else 0
+        fold = run["perks"].get("fold", 0) if extracted or protected_by_doll else 0
         for item in recovered:
             if fold and self.catalog.rarity(item) in RARITIES[:3] and self.catalog.definition(item["id"]).get("kind") == "material":
                 item["value"] = round(item["value"] * (1 + fold))
             self.deposit(item)
         value = self._value(recovered)
         self.last_departure = {"floor": run["floor"], "extracted": extracted, "simulation": False,
-                               "units": len(recovered), "value": value}
+                               "units": len(recovered), "value": value, "protected_by_doll": protected_by_doll}
         if extracted:
             self.player["extracts"] += 1
             self._advance_quest("extracts", 1)
@@ -1680,6 +1763,8 @@ class Turn:
             )
             lead = f"{reason}，" if reason else "电梯门哐地合上，"
             prefix = f"🚪 {lead}稳稳撤回地面！（第 {run['floor']} 层安全撤离）"
+        elif protected_by_doll:
+            prefix = f"🎭 第 {run['floor']} 层战败。替身娃娃已消耗，本局物资全部保全。"
         else:
             if forfeit_safe:
                 prefix = f"💀 第 {run['floor']} 层裁决阵亡，背包与安全箱物品均未带回。"
@@ -2145,7 +2230,7 @@ class Turn:
         self._clear_event()
         return self.reply("🚶 稳妥起见，绕开这摊事留在当前层。")
 
-    def event_choice(self, text: str, _target: str) -> Reply:
+    def event_choice(self, text: str, _target: str, *, enter_landing: bool = True) -> Reply:
         run = self._check_run()
         pending = run["event"]
         if pending["kind"] != "choice":
@@ -2244,13 +2329,16 @@ class Turn:
         if option.get("skip_floors"):
             run["floor"] = expedition.landing(run["floor"],int(option["skip_floors"]))
             lines.append(f"🚀 直降梯轰鸣下坠，一口气跳到第 {run['floor']} 层！")
-            lines.append(self._enter_floor())
+            if enter_landing:
+                lines.append(self._enter_floor())
         if not notes and not items:
             notes.append("找到捷径，电梯继续下行。" if run["floor"] != origin else "奇遇结束，电梯门已开启。")
         record("success", notes, items)
         return self.reply("\n".join(lines))
 
     def _check_flare(self) -> dict:
+        if self.gid.startswith("private:"):
+            raise GameError("可以在已开放电梯的群里使用信号弹求援。道具已保留。")
         enemy = self._check_enemy()
         if not enemy["elite"]:
             raise GameError("信号弹留给精英或守门怪，普通怪可以打或跑。")
@@ -2528,6 +2616,10 @@ class Turn:
             raise GameError("奇点蓄力中，完成下一次主攻击后再用回复或护盾。")
         if key == "doll":
             return self.reply("替身娃娃放在背包里就能护你一次。", count_cooldown=False)
+        if key == "flare":
+            response = self._send_flare(powerful=True)
+            run["bag"].remove(item)
+            return response
         run["bag"].remove(item)
         if key == "coffee":
             healed = self._heal(0.40, report_limit=True)
@@ -2581,8 +2673,6 @@ class Turn:
             run["radar_floor"] = run["floor"] + 1
             self.last_radar_scan = self.radar_scan()
             return self.reply(f"📡 热成像雷达 · F{run['radar_floor']} 侦测到「{room}」。")
-        if key == "flare":
-            return self._send_flare(powerful=True)
         if key == "pouch":
             if run["safe_extra"]:
                 raise GameError("本局临时箱格已经加过一次，扩容袋可以下次再用。")

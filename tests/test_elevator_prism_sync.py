@@ -120,6 +120,75 @@ class PrismAndRush(unittest.TestCase):
             self.assertTrue(elite["elite"])
             self.assertEqual(elite["rounds_fought"],0)
 
+    def test_rush_ignores_odd_events_and_auto_fights_elites(self):
+        self.command("start",{"map_id":"mall"})
+        self.command("rush_settings",{"event_mode":"ignore","auto_elite":True})
+        event = next(row for row in self.cat.events.values() if row["name"] == "神秘自动贩卖机")
+        original = rules.Turn._floor_encounter
+        monster = rules.combat.monster
+
+        def encounter(turn):
+            if turn.run["floor"] == 2:
+                turn.run["event"] = {"kind":"choice","id":event["id"]}
+                return event["name"]
+            return original(turn)
+
+        def weak_enemy(*args, **kwargs):
+            return {**monster(*args, **kwargs), "hp":1,"max_hp":1,"agi":0}
+
+        gold = self.state()["player"]["gold"]
+        with (
+            patch.object(rules.Turn,"_floor_encounter",encounter),
+            patch.object(rules.Turn,"_event_roll",side_effect=["elite","loot"]),
+            patch.object(rules.combat,"monster",side_effect=weak_enemy),
+            patch.object(self.engine.rng,"random",return_value=.9),
+            patch.object(rules.Turn,"_loot",return_value=[{"id":"snack","quality":"","value":12}]),
+        ):
+            result = self.command("rush")
+        self.assertEqual(result["state"]["run"]["floor"],4)
+        self.assertEqual(result["state"]["player"]["gold"],gold)
+        first, second, _ = result["result"]["rush"]["floors"]
+        self.assertEqual(first["adventure"]["outcome"],"ignored")
+        self.assertEqual(second["battle"]["outcome"],"victory")
+
+    def test_rush_random_choice_cannot_overdraw_and_landing_still_stops_on_boss(self):
+        self.command("start",{"map_id":"mall"})
+        self.command("rush_settings",{"event_mode":"random","auto_elite":True})
+        originals = rules.Turn._floor_encounter
+        events = {
+            2: {"id":"test_paid", "name":"购买测试", "choices":[
+                {"label":"买下报价", "buy_offer":True,"cost":10},
+                {"label":"歇一歇", "grant_shield":11},
+            ]},
+            7: {"id":"test_jump", "name":"直降测试", "choices":[{"label":"直降", "skip_floors":2}]},
+        }
+
+        def encounter(turn):
+            if event := events.get(turn.run["floor"]):
+                turn.run["event"] = {"kind":"choice","id":event["id"],"price":2000,
+                                     "offer":{"id":"coffee","quality":"","value":300}}
+                return event["name"]
+            return originals(turn)
+
+        with (
+            patch.dict(self.cat.events, {event["id"]:event for event in events.values()}),
+            patch.object(rules.Turn,"_floor_encounter",encounter),
+            patch.object(self.engine.rng,"choice",side_effect=lambda options:options[0]),
+        ):
+            available = self.state()["player"]["gold"]
+            first = self.command("rush",{"floors":1})
+            self.assertEqual(first["state"]["player"]["gold"],available)
+            self.assertEqual(first["result"]["rush"]["floors"][0]["adventure"]["option"],"歇一歇")
+            self.assertEqual(first["state"]["run"]["shield"],11)
+            with self.engine.store.transaction() as db:
+                turn = rules.Turn(self.engine,db,self.uid,"测试玩家",self.gid,self.now)
+                turn.run["floor"] = 6
+                turn.persist()
+            last = self.command("rush")
+        self.assertEqual([row["floor"] for row in last["result"]["rush"]["floors"]],[7,8])
+        self.assertEqual(last["result"]["rush"]["reason"],"遇到首领")
+        self.assertEqual(last["state"]["run"]["event"]["enemy"]["rounds_fought"],0)
+
     def test_exclusives_and_stat_breakdown(self):
         self.assertEqual(len(self.cat.collections),48)
         for zone in ("tide","zenith"):

@@ -40,7 +40,9 @@ CREATE TABLE IF NOT EXISTS inventory (
 CREATE TABLE IF NOT EXISTS rush_preferences (
     user_id TEXT PRIMARY KEY REFERENCES players(user_id),
     floors INTEGER NOT NULL CHECK(floors IN (3,5,10)),
-    skip_valuable INTEGER NOT NULL CHECK(skip_valuable IN (0,1))
+    skip_valuable INTEGER NOT NULL CHECK(skip_valuable IN (0,1)),
+    event_mode TEXT NOT NULL DEFAULT 'pause' CHECK(event_mode IN ('pause','random','ignore')),
+    auto_elite INTEGER NOT NULL DEFAULT 0 CHECK(auto_elite IN (0,1))
 );
 CREATE TABLE IF NOT EXISTS equipment (
     equip_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL REFERENCES players(user_id),
@@ -157,6 +159,7 @@ class Store:
                 self._migrate_season_stats(db)
                 self._migrate_players(db)
                 self._migrate_equipment(db)
+                self._migrate_rush_preferences(db)
                 if self.catalog is not None:
                     self._migrate_rainbow_stock(db)
                 self._ready = True
@@ -194,6 +197,18 @@ class Store:
                 stats = self.catalog.migrated_stats(row["base_id"],row["rarity"],json.loads(row["stats"]))
                 db.execute("UPDATE equipment SET stats=?,rules_version=2 WHERE equip_id=?",
                            (encode(stats),row["equip_id"]))
+
+    @staticmethod
+    def _migrate_rush_preferences(db: sqlite3.Connection) -> None:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(rush_preferences)")}
+            if "event_mode" not in columns:
+                db.execute("ALTER TABLE rush_preferences ADD COLUMN event_mode TEXT NOT NULL DEFAULT 'pause' "
+                           "CHECK(event_mode IN ('pause','random','ignore'))")
+            if "auto_elite" not in columns:
+                db.execute("ALTER TABLE rush_preferences ADD COLUMN auto_elite INTEGER NOT NULL DEFAULT 0 "
+                           "CHECK(auto_elite IN (0,1))")
 
     @staticmethod
     def _migrate_players(db: sqlite3.Connection) -> None:

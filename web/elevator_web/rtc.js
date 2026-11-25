@@ -3,6 +3,8 @@
 // Only the opted-in game instance loads this script. Authentication stays with the web app.
 window.ElevatorRTC = (() => {
   let owner = "", current = null, retry = 0;
+  const trial = location.protocol === "https:";
+  const fallback = trial ? "当前线路：网页中转" : "网页连接";
 
   function showStatus(label) {
     const el = document.getElementById("game-transport");
@@ -20,7 +22,7 @@ window.ElevatorRTC = (() => {
       pending.reject(new Error("游戏直连已断开"));
     }
     link.pending.clear();
-    showStatus("网页连接");
+    showStatus(fallback);
     if (owner) retry = setTimeout(connect, 60000);
   }
 
@@ -80,11 +82,13 @@ window.ElevatorRTC = (() => {
       };
       dc.onopen = async () => {
         try {
+          const started = performance.now();
           const ack = await send(link, "ping");
           if (!(await ack.json()).ok || current !== link) throw Error();
           clearTimeout(link.deadline);
           link.ready = true;
-          showStatus("WebRTC 直连");
+          const delay = Math.round(performance.now() - started);
+          showStatus(trial ? `当前线路：上海直连（${delay} ms）` : "WebRTC 直连");
         } catch { drop(link); }
       };
       await pc.setLocalDescription(await pc.createOffer());
@@ -104,7 +108,7 @@ window.ElevatorRTC = (() => {
     clearTimeout(retry);
     drop(current);
     owner = name;
-    showStatus("网页连接");
+    showStatus(fallback);
     if (owner) connect();
   }
 

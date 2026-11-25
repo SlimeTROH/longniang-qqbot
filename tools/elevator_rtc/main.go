@@ -1,5 +1,5 @@
 // The game and its SQLite transactions stay in the authenticated web application.
-// This process supplies an ordered WebRTC data channel for the loopback installation.
+// This process supplies an ordered WebRTC data channel and forwards game calls over loopback.
 package main
 
 import (
@@ -13,6 +13,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,10 +30,12 @@ const chunkSize = 12 * 1024
 const maxReply = 4 << 20
 
 type gateway struct {
-	api    *webrtc.API
-	game   string
-	client *http.Client
-	seats  chan struct{}
+	api      *webrtc.API
+	game     string
+	origin   string
+	siteHost string
+	client   *http.Client
+	seats    chan struct{}
 }
 
 type signal struct {
@@ -77,7 +81,8 @@ func (g *gateway) play(ctx context.Context, session string, msg gameRequest) (in
 		return 502, transportError
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", g.game)
+	req.Host = g.siteHost
+	req.Header.Set("Origin", g.origin)
 	req.Header.Set("X-Elevator-Sync", "1")
 	req.Header.Set("X-Elevator-Base", msg.Base)
 	req.AddCookie(&http.Cookie{Name: "elevator_session", Value: session})
@@ -208,13 +213,38 @@ func main() {
 	control := flag.Int("control-port", 8093, "local signalling port")
 	game := flag.Int("game-port", 8092, "local authenticated game API port")
 	udp := flag.Int("udp-port", 34780, "local game data port")
+	bindIP := flag.String("bind-ip", "127.0.0.1", "IPv4 interface for the game data socket")
+	advertiseIP := flag.String("advertise-ip", "", "public IPv4 address for the game ICE candidate")
+	origin := flag.String("origin", "", "HTTPS origin for public trials; default to the loopback game URL")
 	flag.Parse()
 	for _, port := range []int{*control, *game, *udp} {
 		if port < 1 || port > 65535 {
 			log.Fatal("invalid port")
 		}
 	}
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: *udp})
+	bind, err := netip.ParseAddr(*bindIP)
+	if err != nil || !bind.Is4() || (!bind.IsLoopback() && !bind.IsGlobalUnicast()) {
+		log.Fatal("bind-ip must be a specific IPv4 interface address")
+	}
+	inside := bind.IsLoopback()
+	siteHost := loopback(*game)
+	siteOrigin := "http://" + siteHost
+	if inside {
+		if *advertiseIP != "" || *origin != "" {
+			log.Fatal("advertise-ip and origin are only used for non-loopback trials")
+		}
+	} else {
+		public, err := netip.ParseAddr(*advertiseIP)
+		if err != nil || !public.Is4() || !public.IsGlobalUnicast() || public.IsPrivate() {
+			log.Fatal("advertise-ip must be a public IPv4 address")
+		}
+		site, err := url.Parse(*origin)
+		if err != nil || site.Scheme != "https" || site.Hostname() == "" || *origin != "https://"+site.Host {
+			log.Fatal("origin must be an HTTPS origin without credentials, path, query or fragment")
+		}
+		siteHost, siteOrigin = site.Host, *origin
+	}
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IP(bind.AsSlice()), Port: *udp})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -223,14 +253,29 @@ func main() {
 	var settings webrtc.SettingEngine
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	settings.SetLite(true)
-	settings.SetIncludeLoopbackCandidate(true)
-	settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
-	settings.SetRemoteIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
+	settings.SetIncludeLoopbackCandidate(inside)
+	settings.SetIPFilter(func(ip net.IP) bool { return ip.Equal(net.IP(bind.AsSlice())) })
+	settings.SetRemoteIPFilter(func(ip net.IP) bool {
+		if inside {
+			return ip.IsLoopback()
+		}
+		return ip.To4() != nil && ip.IsGlobalUnicast() && !ip.IsPrivate()
+	})
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	settings.SetICEUDPMux(mux)
+	if !inside && *advertiseIP != *bindIP {
+		err = settings.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
+			External: []string{*advertiseIP}, Local: *bindIP, Mode: webrtc.ICEAddressRewriteReplace,
+			AsCandidateType: webrtc.ICECandidateTypeHost,
+		})
+		if err != nil {
+			log.Fatalf("invalid ICE candidate mapping: %v", err)
+		}
+	}
 	settings.SetSCTPMaxMessageSize(64 << 10)
 	g := gateway{
-		api: webrtc.NewAPI(webrtc.WithSettingEngine(settings)), game: "http://" + loopback(*game), seats: make(chan struct{}, 32),
+		api: webrtc.NewAPI(webrtc.WithSettingEngine(settings)), game: "http://" + loopback(*game),
+		origin: siteOrigin, siteHost: siteHost, seats: make(chan struct{}, 32),
 		client: &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 	handlers := http.NewServeMux()

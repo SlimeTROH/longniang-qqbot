@@ -7,11 +7,12 @@ import re
 import sqlite3
 import time
 import weakref
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from nonebot import get_driver, get_plugin, logger, on_message
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageEvent, MessageSegment, PrivateMessageEvent
 from nonebot.rule import Rule
 from nonebot.typing import T_State
 
@@ -216,7 +217,7 @@ def menu_choice(
     return Route(item.action, argument, menu=pending)
 
 
-def _quote_id(event: GroupMessageEvent) -> str | None:
+def _quote_id(event: MessageEvent) -> str | None:
     original = event.original_message or event.get_message()
     for segment in original:
         if segment.type == "reply":
@@ -224,8 +225,18 @@ def _quote_id(event: GroupMessageEvent) -> str | None:
     return None
 
 
-def _menu_ref(event: GroupMessageEvent, message_id: str) -> tuple[str, str, str]:
-    return str(event.self_id), str(event.group_id), message_id
+def _scope(event: MessageEvent) -> tuple[str, str]:
+    """Return the game location and a menu key independent of private/group switches."""
+    group = getattr(event, "group_id", None)
+    uid = str(event.user_id)
+    if getattr(event, "message_type", None) == "private" or group is None:
+        private = f"private:{uid}"
+        return private, private
+    return str(group), uid
+
+
+def _menu_ref(event: MessageEvent, message_id: str) -> tuple[str, str, str]:
+    return str(event.self_id), _scope(event)[0], message_id
 
 
 def _is_old_game_menu(event: GroupMessageEvent) -> bool:
@@ -243,15 +254,15 @@ def _is_old_game_menu(event: GroupMessageEvent) -> bool:
     ))
 
 
-def _number_route(event: GroupMessageEvent, text: str, quoted: str | None) -> Route | None:
+def _number_route(event: MessageEvent, text: str, quoted: str | None) -> Route | None:
     uid = str(event.user_id)
-    gid = str(event.group_id)
+    gid, menu_key = _scope(event)
     now = time.monotonic()
-    selected = menu_choice(text, gid, quoted, _menus.get(uid), now)
+    selected = menu_choice(text, gid, quoted, _menus.get(menu_key), now)
     if selected is not None:
         return selected
     if quoted:
-        older = _menu_history.get(uid, {}).get(quoted)
+        older = _menu_history.get(menu_key, {}).get(quoted)
         if older is not None:
             hist_selected = menu_choice(text, gid, quoted, older, now)
             if hist_selected is not None and hist_selected.command in _REPEATABLE_MENU_ACTIONS:
@@ -262,7 +273,7 @@ def _number_route(event: GroupMessageEvent, text: str, quoted: str | None) -> Ro
     reference = _menu_refs.get(_menu_ref(event, quoted))
     if reference is not None and reference[1] > now:
         return Route("refresh_menu" if reference[0] == uid else "foreign_menu", "")
-    if _is_old_game_menu(event):
+    if not gid.startswith("private:") and _is_old_game_menu(event):
         return Route("refresh_menu", "")
     return None
 
@@ -286,16 +297,39 @@ def _known_lookup(name: str) -> bool:
     )
 
 
-def _command_text(event: GroupMessageEvent) -> str:
+def _command_text(event: MessageEvent) -> str:
     return event.get_plaintext().strip().removeprefix("/").strip().replace("　", " ")
 
 
-async def _route(event: GroupMessageEvent) -> Route | None:
+def private_candidate(event: PrivateMessageEvent) -> bool:
+    if event.user_id == event.self_id:
+        return False
+    text = _command_text(event)
+    if not text:
+        return False
+    if _parse_menu_input(text) is not None:
+        return _number_route(event, text, _quote_id(event)) is not None
+    if _ORDER_CMD_RE.fullmatch(text) or text in _EVENT_WORDS:
+        return True
+    explicit = text.startswith("电梯 ")
+    command = text[3:].lstrip() if explicit else text
+    if not command:
+        return explicit
+    word = command.split(maxsplit=1)[0].casefold()
+    if word in _PREFIX_ONLY and not explicit:
+        return False
+    return (word in _ACTIONS or word == "开局"
+            or re.fullmatch(r"(?:连战|连进)\s*(?:10|[1-9])层?", command) is not None)
+
+
+async def _route(event: MessageEvent) -> Route | None:
     text = _command_text(event)
     if not text:
         return None
-    uid, gid = str(event.user_id), str(event.group_id)
-    pending = _menus.get(uid)
+    uid = str(event.user_id)
+    gid, menu_key = _scope(event)
+    private = gid.startswith("private:")
+    pending = _menus.get(menu_key)
     om = _ORDER_CMD_RE.match(text)
     if om:
         verb, oid = om.group(1), om.group(2).upper()
@@ -335,7 +369,7 @@ async def _route(event: GroupMessageEvent) -> Route | None:
             or _known_lookup(first_arg.split("*")[0].split("x")[0].split("×")[0])
         ):
             return None
-    command = _ACTIONS.get(word)
+    command = "start" if private and word == "开局" else _ACTIONS.get(word)
     if not command:
         label = text
         if label in _EVENT_WORDS and await asyncio.to_thread(game.run_kind, uid) == "choice":
@@ -432,9 +466,9 @@ async def _send_forward_reply(
         return None
 
 
-def _format_reply(event: GroupMessageEvent, reply: Reply, card: bytes | None) -> Message:
+def _format_reply(event: MessageEvent, reply: Reply, card: bytes | None) -> Message:
     outgoing = Message(MessageSegment.reply(event.message_id))
-    if reply.mention.isascii() and reply.mention.isdigit():
+    if getattr(event, "message_type", None) != "private" and reply.mention.isascii() and reply.mention.isdigit():
         outgoing.extend(MessageSegment.at(reply.mention) + MessageSegment.text(" "))
     if card and reply.as_image:
         if reply.image_caption:
@@ -455,17 +489,43 @@ def _format_reply(event: GroupMessageEvent, reply: Reply, card: bytes | None) ->
 @matcher.handle()
 @quoted_menu_matcher.handle()
 async def handle(bot: Bot, event: GroupMessageEvent, state: T_State) -> None:
-    uid, gid = str(event.user_id), str(event.group_id)
-    route: Route = state["elevator_route"]
+    async def send(message: Message):
+        return await bot.send(event, message)
+
+    await _handle_route(bot, event, state["elevator_route"], send)
+
+
+async def handle_private_event(
+    bot: Bot, event: PrivateMessageEvent, send: Callable[[Message], Awaitable[dict | int | None]],
+) -> bool:
+    if not private_candidate(event):
+        return False
+    try:
+        route = await _route(event)
+    except (sqlite3.Error, OSError) as exc:
+        logger.bind(error=type(exc).__name__).warning("无尽电梯暂时无法判断私聊游戏状态")
+        await send(_format_reply(event, Reply("电梯的存档暂时没接上，等一会儿再试。"), None))
+        return True
+    if route is not None:
+        await _handle_route(bot, event, route, send)
+    return True
+
+
+async def _handle_route(
+    bot: Bot, event: MessageEvent, route: Route, send: Callable[[Message], Awaitable[dict | int | None]],
+) -> None:
+    uid = str(event.user_id)
+    gid, menu_key = _scope(event)
+    private = gid.startswith("private:")
     lock = _locks.setdefault(uid, asyncio.Lock())
     async with lock:
-        if route.menu is not None and _menus.get(uid) is not route.menu:
+        if route.menu is not None and _menus.get(menu_key) is not route.menu:
             quoted_id = _quote_id(event)
             if not quoted_id:
                 return
-            if not (route.command in _REPEATABLE_MENU_ACTIONS and _menu_history.get(uid, {}).get(quoted_id) is route.menu):
+            if not (route.command in _REPEATABLE_MENU_ACTIONS and _menu_history.get(menu_key, {}).get(quoted_id) is route.menu):
                 route = Route("refresh_menu", "")
-        if not _group_allowed(event):
+        if not private and not _group_allowed(event):
             return
         refresh = route.command == "refresh_menu"
         try:
@@ -473,25 +533,25 @@ async def handle(bot: Bot, event: GroupMessageEvent, state: T_State) -> None:
             if foreign or (refresh and not await asyncio.to_thread(game.has_run, uid)):
                 cause = "这是另一位乘客的菜单。" if foreign else "这条菜单已失效。"
                 reply = Reply(cause + "发「电梯帮助」查看你当前的选项。")
-                await bot.send(event, _format_reply(event, reply, None))
+                await send(_format_reply(event, reply, None))
                 return
             command = "help" if refresh else route.command
             result = await asyncio.to_thread(
-                game.execute, uid, event.sender.card or event.sender.nickname or "群友",
+                game.execute, uid, getattr(event.sender, "card", None) or event.sender.nickname or "群友",
                 gid, command, route.argument, target=route.target,
             )
         except GameMaintenance:
-            await matcher.finish(MessageSegment.reply(event.message_id) + MessageSegment.text(MAINTENANCE_MESSAGE))
+            await send(_format_reply(event, Reply(MAINTENANCE_MESSAGE), None))
             return
         except (sqlite3.Error, OSError) as exc:
             logger.bind(error=type(exc).__name__).warning("无尽电梯的存档暂不可用")
-            await matcher.finish(MessageSegment.reply(event.message_id) + MessageSegment.text("电梯的存档暂时没接上，等一会儿再试。"))
+            await send(_format_reply(event, Reply("电梯的存档暂时没接上，等一会儿再试。"), None))
             return
         if not result.text:
             return
         if refresh:
             result.text = "这条菜单已经更新，请选择当前操作。\n" + result.text
-        _menus.pop(uid, None)
+        _menus.pop(menu_key, None)
         card = None
         if result.as_image or result.card:
             try:
@@ -502,10 +562,10 @@ async def handle(bot: Bot, event: GroupMessageEvent, state: T_State) -> None:
             except (OSError, ValueError):
                 logger.warning("无尽电梯的卡片未生成，改用文字")
         sent = None
-        if result.forward_title:
+        if not private and result.forward_title:
             sent = await _send_forward_reply(bot, event, result, card)
         if sent is None:
-            sent = await bot.send(event, _format_reply(event, result, card))
+            sent = await send(_format_reply(event, result, card))
         if result.choices:
             if isinstance(sent, dict):
                 message_id = sent.get("message_id", "")
@@ -517,10 +577,10 @@ async def handle(bot: Bot, event: GroupMessageEvent, state: T_State) -> None:
             message_id = str(message_id) if message_id is not None else ""
             ttl = 180 if result.plain_numbers else 120
             pending_entry = PendingMenu(gid, message_id, now + ttl, result.choices, True)
-            _menus[uid] = pending_entry
+            _menus[menu_key] = pending_entry
             if message_id:
                 _menu_refs[_menu_ref(event, message_id)] = (uid, now + RUN_TIMEOUT)
-                hist = _menu_history.setdefault(uid, {})
+                hist = _menu_history.setdefault(menu_key, {})
                 hist[message_id] = pending_entry
                 while len(hist) > 6:
                     hist.pop(next(iter(hist)))

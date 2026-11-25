@@ -103,10 +103,13 @@ def public_account(account):
     return {"username": account["username"], "bound": bool(account.get("qq_id"))}
 
 
-def create_app(game_path=GAME_DB, auth_path=AUTH_DB, *, public_origin="", local_http=False, rtc_port=None) -> FastAPI:
-    if rtc_port is not None and (not local_http or not 1 <= rtc_port <= 65535):
-        raise ValueError("本机 WebRTC 测试需要回环 HTTP 和有效的控制端口")
+def create_app(game_path=GAME_DB, auth_path=AUTH_DB, *, public_origin="", local_http=False,
+               rtc_port=None, rtc_player="", rtc_public=False) -> FastAPI:
     fixed = canonical_origin(public_origin, local=local_http) if public_origin else ""
+    if rtc_port is not None:
+        one_player = rtc_player.isascii() and rtc_player.isdecimal()
+        if not 1 <= rtc_port <= 65535 or (not local_http and not (fixed and (rtc_public or one_player))):
+            raise ValueError("WebRTC 需要有效控制端口，公网还需固定 HTTPS 来源和明确的开放范围")
     auth = AuthStore(auth_path)
     game = WebGame(game_path, on_action=GameFeed(game_path))
     sync = SnapshotCache()
@@ -163,13 +166,22 @@ def create_app(game_path=GAME_DB, auth_path=AUTH_DB, *, public_origin="", local_
     def token(request):
         return request.cookies.get(SESSION_COOKIE, "")
 
+    def rtc_allowed(qq_id):
+        return rtc_port is not None and bool(qq_id) and (local_http or rtc_public or qq_id == rtc_player)
+
+    def show_account(account):
+        view = public_account(account)
+        if rtc_allowed(account.get("qq_id")) and account.get("qq_group"):
+            view["rtc_trial"] = True
+        return view
+
     def set_session_cookie(response, session_token, expires_at=None):
         max_age = None if expires_at is None else min(BROWSER_COOKIE_MAX_AGE, max(0, expires_at - int(time.time())))
         response.set_cookie(SESSION_COOKIE, session_token, max_age=max_age,
                             path=PREFIX, secure=not local_http, httponly=True, samesite="strict")
 
     def session_response(result, *, persistent=True):
-        data = {"account": public_account(result["account"]), "expires_at": result["expires_at"]}
+        data = {"account": show_account(result["account"]), "expires_at": result["expires_at"]}
         if "challenge" in result:
             data["challenge"] = result["challenge"]
         response = JSONResponse(data)
@@ -216,7 +228,7 @@ def create_app(game_path=GAME_DB, auth_path=AUTH_DB, *, public_origin="", local_
                 raise
             return {"account": None}
         account = result["account"]
-        payload = {"account": public_account(account)}
+        payload = {"account": show_account(account)}
         if game_state and account.get("qq_id") and account.get("qq_group"):
             owner = (account["qq_id"], account["qq_group"])
             try:
@@ -299,7 +311,9 @@ def create_app(game_path=GAME_DB, auth_path=AUTH_DB, *, public_origin="", local_
 
         @app.post(API + "/rtc/offer")
         async def rtc_offer(request: Request):
-            await bound_player(request)
+            qq_id, _, _ = await bound_player(request)
+            if not rtc_allowed(qq_id):
+                raise RequestError(403, "rtc_not_enabled", "此账号当前使用网页线路。")
             offer = fields(await read_json(request, 40 * 1024), ("type", "sdp"))
             if offer["type"] != "offer" or len(offer["sdp"]) > 32 * 1024:
                 raise RequestError(422, "invalid_offer", "无效的游戏连接请求。")
@@ -364,14 +378,22 @@ def main():
     cli.add_argument("--port", type=int, default=8092)
     cli.add_argument("--public-origin", default="", help="固定 HTTPS 域名，例如 https://elevator.example.com")
     cli.add_argument("--local-http", action="store_true", help="允许回环 HTTP 开发测试")
-    cli.add_argument("--local-rtc-port", type=int, help="回环测试实例的 WebRTC 控制端口")
+    rtc_modes = cli.add_mutually_exclusive_group()
+    rtc_modes.add_argument("--local-rtc-port", type=int, help="回环测试实例的 WebRTC 控制端口")
+    rtc_modes.add_argument("--rtc-trial-port", type=int, help="指定账号试用的本机 WebRTC 控制端口")
+    rtc_modes.add_argument("--rtc-public-port", type=int, help="所有已绑定账号使用的本机 WebRTC 控制端口")
+    cli.add_argument("--rtc-trial-player", default="", help="试用直连的绑定 QQ 号")
     cli.add_argument("--game-db", type=Path, default=GAME_DB)
     cli.add_argument("--auth-db", type=Path, default=AUTH_DB)
     args = cli.parse_args()
     if args.game_db.resolve() == args.auth_db.resolve():
         cli.error("游戏与账号存档需要使用两个数据库")
+    if (args.local_rtc_port is not None and not args.local_http
+            or (args.rtc_trial_port is not None or args.rtc_public_port is not None) and args.local_http):
+        cli.error("WebRTC 端口选项需要与服务运行模式相符")
+    rtc_port = next((p for p in (args.local_rtc_port, args.rtc_trial_port, args.rtc_public_port) if p is not None), None)
     app = create_app(args.game_db, args.auth_db, public_origin=args.public_origin, local_http=args.local_http,
-                     rtc_port=args.local_rtc_port)
+                     rtc_port=rtc_port, rtc_player=args.rtc_trial_player, rtc_public=args.rtc_public_port is not None)
     uvicorn.run(app, host="127.0.0.1", port=args.port, proxy_headers=not args.local_http,
                 forwarded_allow_ips="127.0.0.1", limit_concurrency=64, access_log=False, server_header=False)
 

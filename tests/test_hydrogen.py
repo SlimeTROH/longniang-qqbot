@@ -11,7 +11,7 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import httpx
 
@@ -161,6 +161,56 @@ class HydrogenTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         parts = api.post.await_args.kwargs["json"]["input"][-1]["content"]
         self.assertEqual([part["type"] for part in parts], ["input_text", "input_image", "input_image"])
+
+    async def test_history_image_follows_a_quoted_bot_reply_to_same_group_source(self):
+        from nonebot.adapters.onebot.v11 import Message, MessageSegment
+        from nonebot.adapters.onebot.v11.event import Reply
+
+        media = sys.modules["hydrogen_test_chat.message_io"]
+        event = types.SimpleNamespace(
+            self_id=100, group_id=5, message_id=91, message_type="group",
+            original_message=Message(MessageSegment.reply(-17)),
+            reply=Reply(time=1, message_type="group", group_id=5, message_id=-17, real_id=-17,
+                        sender={"user_id": 100},
+                        message=Message([MessageSegment.reply(-11), MessageSegment.text("我刚看过这张图")])),
+        )
+        image = {"file":"photo.jpg", "url":"https://gchat.qpic.cn/picture"}
+        bot = Mock(self_id="100", call_api=AsyncMock(side_effect=[
+            {"message_type":"group", "group_id":5, "sender":{"user_id":100},
+             "raw_message":"[CQ:reply,id=-3]我引用另一次答复"},
+            {"message_type":"group", "group_id":5, "sender":{"user_id":500},
+             "message":[{"type":"image", "data":image}]},
+        ]))
+        self.assertEqual(await media.fetch_quoted_reply_images(bot, event), [image])
+        self.assertEqual(bot.call_api.await_args_list, [
+            call("get_msg", message_id="-11"), call("get_msg", message_id="-3"),
+        ])
+
+    async def test_history_image_does_not_follow_user_replies_or_leak_other_scopes(self):
+        from nonebot.adapters.onebot.v11 import Message, MessageSegment
+
+        media = sys.modules["hydrogen_test_chat.message_io"]
+        event = types.SimpleNamespace(self_id=100, group_id=5, message_id=90, message_type="group",
+                                      original_message=Message(MessageSegment.reply(17)))
+        own_reply = {"message_type":"group", "group_id":5, "sender":{"user_id":100},
+                     "message":[{"type":"reply", "data":{"id":"18"}}]}
+        user_reply = {**own_reply, "sender":{"user_id":200}}
+        image = {"type":"image", "data":{"file":"image.jpg"}}
+        for responses, calls in (
+            ([user_reply], 1),
+            ([own_reply, user_reply], 2),
+            ([own_reply, {**user_reply, "group_id":6, "message":[image]}], 2),
+            ([own_reply, {**user_reply, "message_type":"private", "message":[image]}], 2),
+            ([{**own_reply, "message":[{"type":"reply", "data":{"id":"17"}}]}], 1),
+        ):
+            with self.subTest(calls=calls, response=responses[-1]):
+                bot = Mock(self_id="100", call_api=AsyncMock(side_effect=responses))
+                self.assertEqual(await media.fetch_quoted_reply_images(bot, event), [])
+                self.assertEqual(bot.call_api.await_count, calls)
+        event.message_type = "private"
+        bot = Mock(self_id="100", call_api=AsyncMock())
+        self.assertEqual(await media.fetch_quoted_reply_images(bot, event), [])
+        bot.call_api.assert_not_awaited()
 
     async def test_markdown_image_download_uses_qq_cdn_without_following_redirects(self):
         media = sys.modules["hydrogen_test_chat.message_io"]
@@ -476,6 +526,94 @@ class HydrogenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([record.args[0] for record in page_read.await_args_list],
                          [{**empty_filter, "page": page} for page in range(1, 7)])
         order.assert_awaited_once_with({"summary": "清理指定物品"})
+
+    async def test_long_elevator_inventory_drops_old_chat_and_retries_final_without_duplicate_order(self):
+        spec = importlib.util.spec_from_file_location(
+            "hydrogen_test_chat.elevator_knowledge", ROOT / "plugins/chat_bot/elevator_knowledge.py",
+        )
+        guide = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guide)
+        output = guide.ElevatorToolOutput()
+        steps = ["sell|#1723 1|卖指定物资一件"]
+        history = [{"role": "user", "content": "OLD_CHAT " + "x" * 22_000},
+                   {"role": "assistant", "content": "结束以前的话题"},
+                   {"role": "user", "content": "当前问题：筛完六页再整理物资"}]
+        calls = [
+            ("query_my_elevator_status", {"section": "plan"}),
+            *(("query_elevator_inventory_page", {"area": "stock", "rarity": "all", "query": "", "page": p})
+              for p in range(1, 7)),
+            ("create_elevator_order", {"summary": "清理指定物资", "steps": steps}),
+        ]
+        responses = [httpx.Response(200, json={
+            "output": [{"type": "function_call", "name": tool, "call_id": f"call_{i}",
+                        "arguments": json.dumps(args)}],
+            "usage": {"output_tokens": 150},
+        }) for i, (tool, args) in enumerate(calls)]
+        responses.extend([
+            httpx.Response(503), httpx.Response(200, json={"output_text": '{"reply":"查完了。"}'}),
+        ])
+        game = Mock()
+        game.has_run.return_value = False
+        game.create_order.return_value = {
+            "order_id": "E1723", "summary": "清理指定物资",
+            "steps": [{"action": "sell", "argument": "#1723 1", "note": "卖指定物资一件"}],
+        }
+        captured_payloads = []
+        async def capture_post(*args, **kwargs):
+            captured_payloads.append(copy.deepcopy(kwargs["json"]))
+            return responses[len(captured_payloads) - 1]
+
+        with patch.object(self.llm, "_chat_client", return_value=Mock(post=capture_post)), \
+             patch.object(self.llm, "OPENAI_INPUT_LIMIT", 49_000), \
+             patch.object(guide, "_get_live_elevator_game", return_value=game), \
+             patch.object(guide, "lookup_player_status", return_value="仓库共有 221 项"), \
+             patch.object(guide, "lookup_inventory_page", side_effect=lambda _u, _a, _r, _q, page:
+                          f"唯一第 {page} 页" + "物品×1 34金；" * 160):
+            result = await self.llm.chat(
+                history, "persona", "fake", "gpt-6.1-terra",
+                tools=guide.elevator_tools("101", output=output),
+            )
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(result.tool_calls, 8)
+        self.assertEqual(len(captured_payloads), 10)
+        self.assertIn("OLD_CHAT", str(captured_payloads[0]["input"]))
+        final_input = str(captured_payloads[-1]["input"])
+        self.assertNotIn("OLD_CHAT", final_input)
+        self.assertIn("当前问题", final_input)
+        for page in range(1, 7):
+            self.assertIn(f"唯一第 {page} 页", final_input)
+        game.create_order.assert_called_once()
+        self.assertIn("确认 E1723", output.card())
+
+    async def test_elevator_order_requires_matching_confirmation_and_keeps_receipt_on_incomplete(self):
+        spec = importlib.util.spec_from_file_location(
+            "hydrogen_test_chat.elevator_knowledge", ROOT / "plugins/chat_bot/elevator_knowledge.py",
+        )
+        guide = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guide)
+        game = Mock()
+        game.execute.return_value = types.SimpleNamespace(text="派单 E1723 完成 1/1 步｜钱包 10 金")
+        result_output = guide.ElevatorToolOutput()
+        call = {"type": "function_call", "name": "confirm_elevator_order", "call_id": "confirm_1",
+                "arguments": '{"order_id":"E1723"}'}
+        with patch.object(guide, "_get_live_elevator_game", return_value=game):
+            for text in ("E1723 是哪个派单", "确认 E1724", "同意", "通过"):
+                tools = guide.elevator_tools("101", user_text=text)
+                await tools["confirm_elevator_order"].run({"order_id": "E1723"})
+            game.execute.assert_not_called()
+            client = Mock(post=AsyncMock(side_effect=[
+                httpx.Response(200, json={"output": [call]}),
+                httpx.Response(200, json={"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}}),
+            ]))
+            with patch.object(self.llm, "_chat_client", return_value=client):
+                failed = await self.llm.chat(
+                    [{"role": "user", "content": "确认 E1723"}], "persona", "fake", "gpt-6.1-terra",
+                    tools=guide.elevator_tools("101", user_text="确认 E1723", output=result_output),
+                )
+        self.assertFalse(failed.ok)
+        self.assertEqual(failed.tool_calls, 1)
+        game.execute.assert_called_once_with("101", "群友", "private", "confirm_order", "E1723")
+        self.assertEqual(result_output.card(), "派单 E1723 完成 1/1 步｜钱包 10 金")
 
     async def request(self, **kwargs):
         with patch.object(self.v, "_load_service_account", return_value=({}, "p", "global")), \
