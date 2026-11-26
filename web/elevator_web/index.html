@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#0d100f">
   <meta name="description" content="无尽电梯网页版。和 QQ 群共用进度，探索禁区、挑战首领、搜集物资并撤离。">
   <title>无尽电梯 · 搜打撤</title>
-  <link rel="stylesheet" href="/elevator/static/style.css">
-  <link rel="stylesheet" href="/elevator/static/inventory.css">
-  <script src="/elevator/static/inventory.js" defer></script>
+  <link rel="stylesheet" href="/elevator/static/style.css?v=20261126-descent">
+  <link rel="stylesheet" href="/elevator/static/inventory.css?v=20261126-exchange">
+  <script src="/elevator/static/inventory.js?v=20261126-exchange" defer></script>
   <script src="/elevator/static/station.js" defer></script>
   <!-- elevator-rtc -->
   <script src="/elevator/static/app.js" defer></script>
@@ -171,6 +171,113 @@
 
   <p id="announce" class="sr-only" role="status" aria-live="polite"></p>
   <div id="toast" class="toast" role="alert" hidden></div>
+  <div id="prophecy-portal" class="prophecy-portal" aria-hidden="true" hidden>
+    <div class="portal-nebula"></div>
+    <div class="portal-stars stars-far"></div>
+    <div class="portal-stars stars-near"></div>
+    <div class="portal-streaks" aria-hidden="true">
+      <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+      <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+    </div>
+    <div class="portal-rails" aria-hidden="true">
+      <div class="portal-rail rail-left"></div>
+      <div class="portal-rail rail-right"></div>
+    </div>
+    <div class="portal-hud portal-hud-left" aria-hidden="true">
+      <span id="portal-phase-tag">GRAVITY LOCK</span>
+      <span id="portal-gforce">LOAD 1.0 G</span>
+    </div>
+    <div class="portal-hud portal-hud-right" aria-hidden="true">
+      <span>SEED · LOCKED</span>
+      <span id="portal-vel">VEL 0.0 km/s</span>
+    </div>
+    <div class="portal-thruster"></div>
+    <div class="portal-eclipse" aria-hidden="true">
+      <div class="eclipse-corona"></div>
+      <div class="eclipse-disc"></div>
+    </div>
+    <svg class="portal-astrolabe" viewBox="0 0 600 600" aria-hidden="true">
+      <defs>
+        <linearGradient id="astroGold" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#fef9c3" stop-opacity="0.95"/>
+          <stop offset="50%" stop-color="#facc15" stop-opacity="0.8"/>
+          <stop offset="100%" stop-color="#c4b5fd" stop-opacity="0.9"/>
+        </linearGradient>
+      </defs>
+      <g class="astro-outer">
+        <circle cx="300" cy="300" r="276" fill="none" stroke="url(#astroGold)" stroke-width="1" stroke-dasharray="3 9" opacity="0.65"/>
+        <circle cx="300" cy="300" r="258" fill="none" stroke="#fde047" stroke-width="1.2" opacity="0.45"/>
+        <circle cx="300" cy="300" r="244" fill="none" stroke="#a78bfa" stroke-width="0.8" stroke-dasharray="18 6 2 6" opacity="0.55"/>
+        <path d="M300 18 L300 42 M300 558 L300 582 M18 300 L42 300 M558 300 L582 300" stroke="#fef08a" stroke-width="1.6" opacity="0.85"/>
+        <path d="M101 101 L118 118 M482 482 L499 499 M499 101 L482 118 M118 482 L101 499" stroke="#c4b5fd" stroke-width="1.1" opacity="0.6"/>
+      </g>
+      <g class="astro-mid">
+        <circle cx="300" cy="300" r="198" fill="none" stroke="#c4b5fd" stroke-width="1.5" opacity="0.72"/>
+        <ellipse cx="300" cy="300" rx="224" ry="86" fill="none" stroke="url(#astroGold)" stroke-width="1" opacity="0.52" transform="rotate(-24 300 300)"/>
+        <ellipse cx="300" cy="300" rx="224" ry="86" fill="none" stroke="#a78bfa" stroke-width="0.9" opacity="0.42" transform="rotate(36 300 300)"/>
+        <polygon points="300,114 310,290 486,300 310,310 300,486 290,310 114,300 290,290" fill="none" stroke="#fde047" stroke-width="0.9" opacity="0.5"/>
+        <circle cx="300" cy="102" r="4" fill="#fef08a"/>
+        <circle cx="498" cy="300" r="3" fill="#c4b5fd"/>
+        <circle cx="300" cy="498" r="4" fill="#fde047"/>
+        <circle cx="102" cy="300" r="3" fill="#93c5fd"/>
+      </g>
+      <g class="astro-inner">
+        <circle cx="300" cy="300" r="134" fill="none" stroke="#fef08a" stroke-width="1.2" stroke-dasharray="1 5" opacity="0.8"/>
+        <circle cx="300" cy="300" r="118" fill="none" stroke="url(#astroGold)" stroke-width="1" opacity="0.6"/>
+      </g>
+    </svg>
+    <div class="portal-shockwave wave-a"></div>
+    <div class="portal-shockwave wave-b"></div>
+    <div class="portal-flash"></div>
+    <div class="portal-scanlines" aria-hidden="true"></div>
+    <div class="portal-vignette" aria-hidden="true"></div>
+    <div class="portal-letterbox bar-top" aria-hidden="true"></div>
+    <div class="portal-letterbox bar-bottom" aria-hidden="true"></div>
+    <div class="portal-core">
+      <div id="portal-altitude" class="portal-altitude">↑ GRAVITY LOCK · 0 m</div>
+      <span class="portal-eyebrow">✦ STARLIGHT FABLE · CELESTIAL ASCENT ✦</span>
+      <h2 id="portal-title">来自群星的寓言集</h2>
+      <p id="portal-subtitle">星轨对齐 · 冲破云海直抵群星</p>
+    </div>
+    <button id="portal-skip" type="button" class="portal-skip" aria-label="跳过入场动画">跳过 ⏭</button>
+  </div>
+
+  <div id="descent-portal" class="descent-portal" data-map="mall" aria-hidden="true" hidden>
+    <div class="descent-shaft" aria-hidden="true">
+      <div class="shaft-beams"></div>
+      <div class="shaft-streaks">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <div class="shaft-cables cable-left"></div>
+      <div class="shaft-cables cable-right"></div>
+    </div>
+    <div class="descent-door door-left" aria-hidden="true">
+      <div class="door-plate"></div>
+      <div class="door-hazard"></div>
+      <div class="door-stencil">SECTOR ELEVATOR // 01</div>
+    </div>
+    <div class="descent-door door-right" aria-hidden="true">
+      <div class="door-plate"></div>
+      <div class="door-hazard"></div>
+      <div class="door-stencil">CAUTION · HIGH RISK</div>
+    </div>
+    <div class="descent-seam-glow" aria-hidden="true"></div>
+    <div class="descent-beacon" aria-hidden="true"></div>
+    <div class="descent-marquee" aria-hidden="true">
+      <div class="marquee-top">
+        <span id="descent-mode-badge" class="marquee-badge">DIVE · 下潜</span>
+        <span id="descent-depth" class="marquee-depth">▼ -0 m</span>
+      </div>
+      <div class="marquee-screen">
+        <span id="descent-arrow" class="marquee-arrow">▼</span>
+        <strong id="descent-floor">G</strong>
+        <span id="descent-map-name" class="marquee-map">废弃商场</span>
+      </div>
+      <div id="descent-status" class="marquee-status">CABIN LOCKED · DESCENDING</div>
+    </div>
+    <div class="descent-vignette" aria-hidden="true"></div>
+    <button id="descent-skip" type="button" class="descent-skip" aria-label="跳过下潜动画">跳过 ⏭</button>
+  </div>
 
   <dialog id="challenge-dialog" class="dialog">
     <form method="dialog"><button class="close quiet" aria-label="关闭群验证">×</button></form>

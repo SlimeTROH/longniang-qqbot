@@ -91,7 +91,7 @@ class GameFeed:
         if run is None:
             return None
         run = json.loads(run[0])
-        if run.get("sim"):
+        if run.get("sim") or run.get("prophecy"):
             return None
         personal, group_record = self._season_record(db, uid, group)
         last_gear = db.execute("SELECT coalesce(max(equip_id),0) FROM equipment WHERE user_id=?", (uid,)).fetchone()[0]

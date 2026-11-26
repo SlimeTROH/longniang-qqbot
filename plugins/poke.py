@@ -94,7 +94,7 @@ async def _(bot: Bot, event: NoticeEvent) -> None:
         "对方没说话，突然伸手戳了你一下。\n"
         "· 用 15~35 字简短作出符合当前好感档位（"
         f"「{tier.get('name', '?')}」"
-        "）的反应：负/低好感冷斥赶人，中好感挑眉微讽，高好感嘴硬纵容。\n"
+        "）的自然口语反应：负好感冷斥赶人，初识与中好感带着大姐姐的懒散笑意轻嘲打趣，高好感嘴硬纵容、略带无奈与偏心，绝不冷硬敷衍，也绝不发嗲油腻。\n"
     )
     user_text = random.choice(POKE_INPUTS)
     model_input = (

@@ -15,8 +15,9 @@ const actionTitles = {
   warehouse: "仓库", sell: "出售物资", equipment: "装备详情", wear: "穿戴装备",
   reroll: "重铸词条", decode: "解码盲盒", black_market: "黑市", craft: "黑市兑换",
   gallery: "陈列室", atlas: "图鉴进度", rename: "游戏昵称", support: "支援群友",
+  prophecy: "来自群星的寓言集", prophecy_rank: "群星寓言周榜", exchange: "无尽电梯交易所",
 };
-const rankActions = new Set(["rank", "all_rank"]);
+const rankActions = new Set(["rank", "all_rank", "prophecy_rank"]);
 const historyLog = [];
 const ui = { account: null, state: null, view: "station", market: "shop", storage: "warehouse",
   filter: "", busy: false, syncing: false, challenge: null, timer: 0, toast: 0, generation: 0,
@@ -525,7 +526,7 @@ function renderStatus() {
   );
   const base = basicAttributes(run?.effective_stats || run?.stats || player.stats || {}, player.stat_sources || {});
   const effects = run ? window.ElevatorInventory.activeFieldItems(run) : [];
-  $("status-tag").textContent = run?.simulation || run?.sim ? "模拟" : run ? "下潜中" : "地面";
+  $("status-tag").textContent = run?.prophecy ? "星兆试炼" : run?.simulation || run?.sim ? "模拟" : run ? "下潜中" : "地面";
   $("status-body").replaceChildren(
     ...(run ? [node("p", { className: "item-facts", text: `安全箱 ${format(run.safe?.length || 0)} / ${format(run.safe_capacity ?? player.safebox)}` })] : []),
     base,

@@ -562,17 +562,737 @@ window.ElevatorInventory = (() => {
     );
   }
 
+  function exchangePanel(ctx) {
+    const { node, button, format, state, selection } = ctx;
+    const ex = state.exchange || { listings: [], tradable: { inventory: [], equipment: [], shining: [] }, barter_catalog: {} };
+    const inRun = Boolean(state.run);
+    const wrap = node("div", { className: "exchange-panel" });
+
+    const ASSET_LABELS = { inventory: "仓库物资", equipment: "闲置装备", shining: "闪耀祝福" };
+    const GRADE_ORDER = ["rainbow", "shining", "red", "gold", "purple", "blue", "green", "white"];
+
+    function itemUid(assetType, it) {
+      if (!it) return "";
+      if (assetType === "inventory") return `inv:${it.stock_id}`;
+      if (assetType === "equipment") return `eq:${it.equip_id}`;
+      return `sh:${it.piece}`;
+    }
+
+    function allTradableEntries() {
+      const out = [];
+      for (const aType of ["inventory", "equipment", "shining"]) {
+        for (const it of (ex.tradable?.[aType] || [])) {
+          out.push({ assetType: aType, item: it, uid: itemUid(aType, it) });
+        }
+      }
+      return out;
+    }
+
+    function formatGearSummary(it) {
+      const parts = [];
+      if (it.stats) {
+        parts.push(Object.entries(it.stats).map(([k, v]) => `${ctx.statNames[k] || k}${v >= 0 ? "+" : ""}${v}`).join(" "));
+      }
+      if (it.affixes?.length) {
+        parts.push("词条：" + it.affixes.map(a => a.name).join("、"));
+      }
+      return parts.join(" ｜ ");
+    }
+
+    function entrySearchText(entry) {
+      const it = entry.item;
+      return [
+        it.name, it.id, it.slot, it.category_label, it.rarity_label, it.quality,
+        it.description, ASSET_LABELS[entry.assetType],
+        it.equip_id ? `#${it.equip_id}` : "",
+        it.piece || "",
+        ...(it.affixes || []).map(a => `${a.name} ${a.description || ""}`),
+      ].filter(Boolean).join(" ").toLowerCase();
+    }
+
+    // Persistent form draft across state refreshes
+    const draft = selection.exDraft ||= {
+      scope: "public",
+      target: "",
+      selectedUid: "",
+      quantity: 1,
+      allowGold: true,
+      allowBarter: false,
+      priceGold: "",
+      wantId: "",
+      wantName: "",
+    };
+
+    const allEntries = allTradableEntries();
+    function getSelectedEntry() {
+      if (!draft.selectedUid) return null;
+      return allEntries.find(e => e.uid === draft.selectedUid) || null;
+    }
+
+    // --- Reusable Secondary Modal Picker (with search, category tabs & rarity filter) ---
+    function openSearchPicker({
+      title, subtitle = "", entries, selectedKey = "", showAssetTabs = false,
+      showGradeFilter = false, topOption = null, renderCardMeta, onSelect, searchPlaceholder = "搜索名称、品质、部位、词条或 #编号…",
+    }) {
+      const dialog = getDialog(ctx);
+      let activeAsset = "all";
+      let activeGrade = "";
+      let query = "";
+
+      const headCount = node("span", { className: "inv-list-count" });
+      const searchInput = node("input", {
+        type: "search", className: "exchange-picker-search",
+        placeholder: searchPlaceholder, "aria-label": title + "搜索",
+      });
+
+      const tabBar = showAssetTabs ? node("div", { className: "inv-tabs exchange-picker-tabs" }) : null;
+      const gradeSel = showGradeFilter ? node("select", { className: "exchange-picker-grade", "aria-label": "按品质筛选" }) : null;
+      const grid = node("div", { className: "exchange-picker-grid" });
+
+      if (showGradeFilter && gradeSel) {
+        const presentGrades = GRADE_ORDER.filter(g => entries.some(e => (e.item?.rarity || e.rarity) === g));
+        const gradeLabels = {
+          rainbow: "🌈 虹彩", shining: "✨ 闪耀", red: "🟥 传世红", gold: "🟨 大金",
+          purple: "🟪 紫色", blue: "🟦 蓝色", green: "🟩 绿色", white: "⬜ 白色",
+        };
+        gradeSel.replaceChildren(
+          node("option", { value: "", text: "全部品质" }),
+          ...presentGrades.map(g => node("option", { value: g, text: gradeLabels[g] || g })),
+        );
+      }
+
+      function renderTabs() {
+        if (!tabBar) return;
+        const counts = {
+          all: entries.length,
+          inventory: entries.filter(e => e.assetType === "inventory").length,
+          equipment: entries.filter(e => e.assetType === "equipment").length,
+          shining: entries.filter(e => e.assetType === "shining").length,
+        };
+        const tabsDef = [
+          ["all", `全部 (${counts.all})`],
+          ["inventory", `仓库物资 (${counts.inventory})`],
+          ["equipment", `闲置装备 (${counts.equipment})`],
+          ["shining", `闪耀祝福 (${counts.shining})`],
+        ];
+        tabBar.replaceChildren(...tabsDef.map(([id, label]) =>
+          button(label, () => { activeAsset = id; renderTabs(); renderGrid(); }, "inv-tab", { "aria-pressed": String(id === activeAsset) }),
+        ));
+      }
+
+      function renderGrid() {
+        const needle = query.trim().toLowerCase();
+        const filtered = entries.filter(e => {
+          if (showAssetTabs && activeAsset !== "all" && e.assetType !== activeAsset) return false;
+          const r = e.item?.rarity || e.rarity || "";
+          if (showGradeFilter && activeGrade && r !== activeGrade) return false;
+          if (needle && !e.searchText.includes(needle)) return false;
+          return true;
+        });
+        headCount.textContent = `共 ${format(filtered.length)} 项`;
+        const cards = [];
+        if (topOption && !needle) {
+          const isSel = selectedKey === topOption.key;
+          const topBtn = button("", () => { onSelect(topOption.value); closeDetail(); },
+            "inv-card exchange-pick-card exchange-pick-any" + (isSel ? " is-selected" : ""),
+            { "data-grade": topOption.grade || "neutral" });
+          topBtn.append(
+            node("span", { className: "inv-card-head" },
+              node("span", { className: "inv-card-name", text: topOption.title }),
+              isSel ? node("span", { className: "inv-grade", text: "✓ 已选" }) : null,
+            ),
+            node("span", { className: "inv-card-meta" }, node("span", { text: topOption.meta || "" })),
+          );
+          cards.push(topBtn);
+        }
+        for (const entry of filtered) {
+          const info = renderCardMeta(entry);
+          const isSel = entry.key === selectedKey;
+          const btn = button("", () => { onSelect(entry.value); closeDetail(); },
+            "inv-card exchange-pick-card" + (isSel ? " is-selected" : ""),
+            { "data-grade": info.grade || "neutral" });
+          btn.append(
+            node("span", { className: "inv-card-head" },
+              node("span", { className: "inv-card-name", text: info.name }),
+              node("span", { className: "inv-grade", text: isSel ? "✓ 已选" : info.badge }),
+            ),
+            info.sub ? node("span", { className: "exchange-pick-sub", text: info.sub }) : null,
+            node("span", { className: "inv-card-meta" },
+              node("span", { text: info.metaLeft || "" }),
+              info.metaRight ? node("span", { className: "inv-card-value", text: info.metaRight }) : null,
+            ),
+          );
+          cards.push(btn);
+        }
+        grid.replaceChildren(...(cards.length ? cards : [node("p", { className: "inv-empty", text: "没有找到匹配的物品，试试换个关键词。" })]));
+      }
+
+      const onSearch = ev => {
+        if (ev.isComposing) return;
+        query = searchInput.value;
+        renderGrid();
+      };
+      searchInput.addEventListener("input", onSearch);
+      searchInput.addEventListener("compositionend", onSearch);
+      if (gradeSel) gradeSel.addEventListener("change", () => { activeGrade = gradeSel.value; renderGrid(); });
+
+      const controlsRow = node("div", { className: "exchange-picker-controls" }, searchInput, gradeSel);
+      dialog.replaceChildren(
+        node("div", { className: "inv-detail-header", "data-grade": "neutral" },
+          node("div", {},
+            node("p", { className: "inv-detail-meta", text: subtitle || "点击任意卡片即可选择" }),
+            node("h2", { id: "inventory-detail-title", text: title }),
+          ),
+          button("关闭", closeDetail, "inv-detail-close", { "aria-label": "关闭选择器" }),
+        ),
+        node("div", { className: "inv-detail-body exchange-picker-body" },
+          tabBar,
+          node("div", { className: "exchange-picker-toolbar" }, controlsRow, headCount),
+          grid,
+        ),
+      );
+      renderTabs();
+      renderGrid();
+      if (!dialog.open) dialog.showModal();
+      setTimeout(() => searchInput.focus({ preventScroll: true }), 20);
+    }
+
+    // --- 1. Create Listing Form ---
+    const formDetails = node("details", { className: "inv-list exchange-create", open: selection.exCreateOpen ? "" : null });
+    formDetails.addEventListener("toggle", () => { selection.exCreateOpen = formDetails.open; });
+
+    const scopeSel = node("select", { "aria-label": "上架范围" },
+      node("option", { value: "public", text: "📢 公开售卖（72小时）" }),
+      node("option", { value: "direct", text: "🤝 1对1定向交易（24小时）" }));
+    scopeSel.value = draft.scope;
+
+    const targetInput = node("input", {
+      type: "text", inputmode: "numeric", placeholder: "输入对方 QQ 号",
+      value: draft.target || "", hidden: draft.scope !== "direct", "aria-label": "对方 QQ 号",
+    });
+
+    // Selected listing item preview box + trigger button
+    const itemBox = node("div", { className: "exchange-selected-box" });
+    const qtyWrap = node("div", { className: "exchange-qty-wrap", hidden: true });
+    const qtyInput = node("input", { type: "number", min: 1, max: 1, value: String(draft.quantity || 1), "aria-label": "上架数量" });
+    const qtyMinus = button("−", () => {
+      qtyInput.value = String(Math.max(1, (Math.floor(Number(qtyInput.value) || 1) - 1)));
+      draft.quantity = Number(qtyInput.value);
+      syncFormState();
+    }, "quiet small", { "aria-label": "减少数量" });
+    const qtyPlus = button("＋", () => {
+      const maxQ = Number(qtyInput.max) || 1;
+      qtyInput.value = String(Math.min(maxQ, (Math.floor(Number(qtyInput.value) || 1) + 1)));
+      draft.quantity = Number(qtyInput.value);
+      syncFormState();
+    }, "quiet small", { "aria-label": "增加数量" });
+    qtyWrap.append(node("span", { className: "exchange-field-label", text: "上架数量" }),
+      node("div", { className: "inv-stepper" }, qtyMinus, qtyInput, qtyPlus));
+
+    // Trade mode toggles: Gold, Barter, or Both
+    const goldToggle = node("input", { type: "checkbox", checked: draft.allowGold ? "" : null });
+    const barterToggle = node("input", { type: "checkbox", checked: draft.allowBarter ? "" : null });
+    const goldLabel = node("label", { className: "exchange-mode-chip" }, goldToggle, node("span", { text: "💰 金币买卖" }));
+    const barterLabel = node("label", { className: "exchange-mode-chip" }, barterToggle, node("span", { text: "🔄 以物换物" }));
+    const modeRow = node("div", { className: "exchange-mode-group" },
+      node("span", { className: "exchange-field-label", text: "交易方式（可单选或两个都选）" }),
+      node("div", { className: "exchange-mode-chips" }, goldLabel, barterLabel),
+    );
+
+    // Gold pricing panel
+    const priceInput = node("input", {
+      type: "number", min: 500, max: 100000000, step: 100,
+      placeholder: "输入总金币价格", value: draft.priceGold || "", "aria-label": "金币总价",
+    });
+    const fillMinBtn = button("填入底价", () => {
+      if (priceInput.min) {
+        priceInput.value = priceInput.min;
+        draft.priceGold = priceInput.value;
+      }
+    }, "quiet small");
+    const goldRow = node("div", { className: "exchange-subpanel" },
+      node("span", { className: "exchange-field-label", text: "金币总价" }),
+      node("div", { className: "exchange-row" }, priceInput, fillMinBtn),
+    );
+
+    // Barter target picker panel
+    const wantBox = node("div", { className: "exchange-want-box" });
+    const barterRow = node("div", { className: "exchange-subpanel" },
+      node("span", { className: "exchange-field-label", text: "希望换取的物品（同品质同分类）" }),
+      wantBox,
+    );
+
+    const hint = node("p", { className: "item-facts exchange-hint" });
+    const formErr = node("p", { className: "form-error", hidden: true });
+
+    function openTradablePicker() {
+      const pickerEntries = allEntries.map(e => ({
+        key: e.uid,
+        assetType: e.assetType,
+        item: e.item,
+        value: e,
+        searchText: entrySearchText(e),
+      }));
+      openSearchPicker({
+        title: "选择要上架的交易物",
+        subtitle: "支持跨分类搜索物品名、品质、槽位、词条或装备 #编号（穿戴中装备与唯一虹彩不可挂单）",
+        entries: pickerEntries,
+        selectedKey: draft.selectedUid,
+        showAssetTabs: true,
+        showGradeFilter: true,
+        renderCardMeta: e => {
+          const it = e.item;
+          const isEq = e.assetType === "equipment";
+          return {
+            name: isEq ? `${it.name} #${it.equip_id}` : it.name,
+            badge: `${it.rarity_label}${isEq ? "·" + it.slot : ""}`,
+            grade: it.rarity,
+            sub: isEq ? formatGearSummary(it) : (it.quality ? `品相：${it.quality}` : (it.category === "rainbow" ? "重复副本（可交易）" : it.category_label)),
+            metaLeft: isEq ? "闲置装备" : `可用 ×${format(it.quantity || 1)}`,
+            metaRight: `底价 ${format(it.min_gold || 500)} 金`,
+          };
+        },
+        onSelect: chosenEntry => {
+          const prev = getSelectedEntry();
+          draft.selectedUid = chosenEntry.uid;
+          draft.quantity = 1;
+          qtyInput.value = "1";
+          // Reset specific barter target if category/rarity changed
+          if (!prev || prev.assetType !== chosenEntry.assetType ||
+              prev.item.category !== chosenEntry.item.category || prev.item.rarity !== chosenEntry.item.rarity) {
+            draft.wantId = "";
+            draft.wantName = "";
+          }
+          draft.priceGold = "";
+          syncFormState();
+        },
+      });
+    }
+
+    function openWantPicker(entry) {
+      const chosen = entry.item;
+      const catalogKey = entry.assetType === "equipment"
+        ? `equipment:${chosen.rarity === "red" ? "red" : "standard"}`
+        : `${chosen.category}:${chosen.rarity}`;
+      const candidates = (ex.barter_catalog?.[catalogKey] || []).filter(c => !(
+        (chosen.category === "rainbow" || chosen.category === "shining") && c.id === chosen.id
+      ));
+      const pickerEntries = candidates.map(c => ({
+        key: c.id,
+        item: c,
+        rarity: chosen.rarity,
+        value: { id: c.id, name: c.slot ? `${chosen.rarity_label}·${c.name}(${c.slot})` : c.name },
+        searchText: [c.name, c.id, c.slot, c.category_label, c.rarity_label, c.description].filter(Boolean).join(" ").toLowerCase(),
+      }));
+      openSearchPicker({
+        title: "指定想要交换的物品",
+        subtitle: `须与上架物同品质同分类：仅限「${chosen.rarity_label}${chosen.category_label}」`,
+        entries: pickerEntries,
+        selectedKey: draft.wantId || "__ANY__",
+        topOption: {
+          key: "__ANY__",
+          value: { id: "", name: "" },
+          title: `✨ 任意「${chosen.rarity_label}${chosen.category_label}」（不指定具体物品）`,
+          meta: "买家可用任意同品质同分类物品与你交换",
+          grade: chosen.rarity,
+        },
+        searchPlaceholder: "搜索目标物品名、部位或关键词…",
+        renderCardMeta: e => {
+          const c = e.item;
+          return {
+            name: c.name,
+            badge: c.slot || chosen.rarity_label,
+            grade: chosen.rarity,
+            sub: c.description || c.category_label || "",
+            metaLeft: `指定换取`,
+            metaRight: "",
+          };
+        },
+        onSelect: picked => {
+          draft.wantId = picked.id || "";
+          draft.wantName = picked.name || "";
+          syncFormState();
+        },
+      });
+    }
+
+    const submitBtn = button("确认上架", async () => {
+      formErr.hidden = true;
+      const entry = getSelectedEntry();
+      if (!entry) {
+        formErr.textContent = "请先点击「选择交易物」挑选要上架的物品。";
+        formErr.hidden = false;
+        return;
+      }
+      if (!draft.allowGold && !draft.allowBarter) {
+        formErr.textContent = "请至少勾选一种交易方式（金币买卖 或 以物换物）。";
+        formErr.hidden = false;
+        return;
+      }
+      const mode = draft.allowGold && draft.allowBarter ? "both" : draft.allowGold ? "gold" : "barter";
+      const params = {
+        scope: scopeSel.value,
+        target_user_id: scopeSel.value === "direct" ? targetInput.value.trim() : "",
+        mode,
+        asset_type: entry.assetType,
+      };
+      if (entry.assetType === "inventory") {
+        params.stock_id = entry.item.stock_id;
+        params.quantity = Math.max(1, Math.min(entry.item.quantity, Math.floor(Number(qtyInput.value) || 1)));
+      } else if (entry.assetType === "equipment") {
+        params.equip_id = entry.item.equip_id;
+      } else {
+        params.piece = entry.item.piece;
+      }
+      if (mode === "gold" || mode === "both") {
+        params.price_gold = Math.floor(Number(priceInput.value) || 0);
+      }
+      if (mode === "barter" || mode === "both") {
+        params.want_item_id = draft.wantId || "";
+      }
+      const ok = await ctx.execute(control("发布挂单", "exchange_list", params), {
+        inline: true,
+        onError: msg => { formErr.textContent = msg; formErr.hidden = false; },
+      });
+      if (ok) {
+        draft.selectedUid = "";
+        draft.quantity = 1;
+        draft.priceGold = "";
+        draft.wantId = "";
+        draft.wantName = "";
+      }
+    }, "primary");
+
+    function syncFormState() {
+      draft.scope = scopeSel.value;
+      draft.target = targetInput.value;
+      targetInput.hidden = scopeSel.value !== "direct";
+      goldLabel.classList.toggle("is-active", draft.allowGold);
+      barterLabel.classList.toggle("is-active", draft.allowBarter);
+
+      const entry = getSelectedEntry();
+      if (!entry) {
+        itemBox.replaceChildren(
+          node("div", { className: "exchange-selected-empty" },
+            node("span", { text: allEntries.length ? `仓库/装备/祝福共 ${allEntries.length} 件可上架` : "当前暂无可上架物品（穿戴中装备与唯一虹彩不可挂单）" }),
+            button("🔍 选择交易物", openTradablePicker, "primary small", { disabled: allEntries.length ? null : "" }),
+          ),
+        );
+        qtyWrap.hidden = true;
+        wantBox.replaceChildren(node("span", { className: "item-facts", text: "请先选择要上架的交易物，再指定想要换取的目标物品。" }));
+        hint.textContent = "支持选择「金币买卖」「以物换物」或两个同时开启；点击「选择交易物」可在弹窗中按分类与关键词搜索。";
+        goldRow.hidden = !draft.allowGold;
+        barterRow.hidden = !draft.allowBarter;
+        submitBtn.disabled = inRun || !entry;
+        return;
+      }
+
+      const chosen = entry.item;
+      const isInv = entry.assetType === "inventory" && chosen.category !== "rainbow";
+      qtyWrap.hidden = !isInv;
+      qtyInput.max = String(chosen.quantity || 1);
+      const qty = isInv ? Math.max(1, Math.min(chosen.quantity, Math.floor(Number(qtyInput.value) || 1))) : 1;
+      qtyInput.value = String(qty);
+      draft.quantity = qty;
+
+      const summaryLine = entry.assetType === "equipment"
+        ? formatGearSummary(chosen)
+        : [chosen.category_label, chosen.quality ? `品相：${chosen.quality}` : "", `库存 ×${format(chosen.quantity || 1)}`].filter(Boolean).join(" · ");
+
+      itemBox.replaceChildren(
+        node("div", { className: "exchange-selected-card", "data-grade": chosen.rarity },
+          node("div", { className: "exchange-selected-info" },
+            node("div", { className: "exchange-selected-head" },
+              node("span", { className: "inv-grade-pill", "data-grade": chosen.rarity, text: `${chosen.rarity_label}${chosen.slot ? "·" + chosen.slot : ""}` }),
+              node("strong", { text: entry.assetType === "equipment" ? `${chosen.name} #${chosen.equip_id}` : chosen.name }),
+            ),
+            summaryLine ? node("small", { className: "item-facts", text: summaryLine }) : null,
+          ),
+          button("🔍 更换交易物", openTradablePicker, "quiet small"),
+        ),
+      );
+
+      const minGold = (chosen.min_gold || 500) * qty;
+      priceInput.min = String(minGold);
+      if (!Number(priceInput.value) || Number(priceInput.value) < minGold) {
+        priceInput.value = String(minGold);
+        draft.priceGold = priceInput.value;
+      }
+      fillMinBtn.textContent = `填入底价 (${format(minGold)} 金)`;
+
+      const wantLabel = draft.wantId
+        ? `🎯 指定换取：${draft.wantName || draft.wantId}${isInv ? ` ×${qty}` : ""}`
+        : `✨ 任意同品质同类：${chosen.rarity_label}${chosen.category_label}${isInv ? ` ×${qty}` : ""}`;
+      wantBox.replaceChildren(
+        node("div", { className: "exchange-want-row" },
+          node("span", { className: "exchange-want-text", text: wantLabel }),
+          node("div", { className: "exchange-want-actions" },
+            button("🔍 指定交换物品", () => openWantPicker(entry), "quiet small"),
+            draft.wantId ? button("不指定", () => { draft.wantId = ""; draft.wantName = ""; syncFormState(); }, "quiet small") : null,
+          ),
+        ),
+      );
+
+      goldRow.hidden = !draft.allowGold;
+      barterRow.hidden = !draft.allowBarter;
+
+      if (draft.allowGold && draft.allowBarter) {
+        hint.textContent = `✨ 双模式挂单：买家既可用 ≥${format(minGold)} 金直接买走，也可用「${draft.wantId ? (draft.wantName || draft.wantId) : `任意${chosen.rarity_label}${chosen.category_label}`}」${isInv ? `×${qty}` : ""} 交换。`;
+      } else if (draft.allowGold) {
+        hint.textContent = `💰 金币售卖底价：${format(minGold)} 金（虹彩底价 ${format(ex.min_floors?.rainbow || 1500000)} 金，仅允许挂售重复副本并保留 1 件在仓）。`;
+      } else {
+        hint.textContent = `🔄 同品质同分类以物换物：仅接受「${draft.wantId ? (draft.wantName || draft.wantId) : `任意${chosen.rarity_label}${chosen.category_label}`}」${isInv ? `×${qty}` : ""}。`;
+      }
+      submitBtn.disabled = inRun || (!draft.allowGold && !draft.allowBarter);
+    }
+
+    scopeSel.addEventListener("change", syncFormState);
+    targetInput.addEventListener("input", () => { draft.target = targetInput.value; });
+    qtyInput.addEventListener("input", syncFormState);
+    priceInput.addEventListener("input", () => { draft.priceGold = priceInput.value; });
+    goldToggle.addEventListener("change", () => {
+      if (!goldToggle.checked && !barterToggle.checked) {
+        goldToggle.checked = true;
+        return;
+      }
+      draft.allowGold = goldToggle.checked;
+      syncFormState();
+    });
+    barterToggle.addEventListener("change", () => {
+      if (!barterToggle.checked && !goldToggle.checked) {
+        barterToggle.checked = true;
+        return;
+      }
+      draft.allowBarter = barterToggle.checked;
+      syncFormState();
+    });
+    syncFormState();
+
+    formDetails.append(
+      node("summary", { text: inRun ? "发布新挂单（撤离回大厅后可操作）" : "＋ 发布新挂单（支持搜索选物 / 金币 / 以物换物 / 双选）" }),
+      node("div", { className: "exchange-form" },
+        node("div", { className: "exchange-row" }, scopeSel, targetInput),
+        itemBox,
+        qtyWrap,
+        modeRow,
+        goldRow,
+        barterRow,
+        hint, formErr, submitBtn,
+      ),
+    );
+    wrap.append(formDetails);
+
+    // --- 2. Barter Offer Picker Dialog (upgraded to searchable card modal!) ---
+    function openBarterDialog(listing) {
+      const candidates = (ex.tradable?.[listing.asset_type] || []).filter(item => {
+        if (item.category !== listing.category || item.rarity !== listing.rarity) return false;
+        if (listing.asset_type === "inventory" && (item.quantity || 1) < listing.quantity) return false;
+        if (listing.want_item_id && item.id !== listing.want_item_id) return false;
+        if ((listing.category === "rainbow" || listing.category === "shining") && item.id === listing.item_id) return false;
+        return true;
+      });
+
+      const dialog = getDialog(ctx);
+      const err = node("p", { className: "inv-detail-error", hidden: true });
+      const searchInput = node("input", {
+        type: "search", className: "exchange-picker-search",
+        placeholder: "搜索你仓库中符合条件的物品、词条或 #编号…", "aria-label": "搜索交换物品",
+      });
+      const grid = node("div", { className: "exchange-picker-grid" });
+      let pickedIdx = candidates.length ? 0 : -1;
+      let query = "";
+
+      const confirmBtn = button("确认以物换物", async () => {
+        const chosen = candidates[pickedIdx];
+        if (!chosen) return;
+        err.hidden = true;
+        const params = { listing_id: listing.listing_id, pay_mode: "barter" };
+        if (listing.asset_type === "inventory") params.offer_stock_id = chosen.stock_id;
+        else if (listing.asset_type === "equipment") params.offer_equip_id = chosen.equip_id;
+        else params.offer_piece = chosen.piece;
+        const ok = await ctx.execute(control("以物换物", "exchange_buy", params), {
+          inline: true,
+          onError: msg => { err.textContent = msg; err.hidden = false; },
+        });
+        if (ok) closeDetail();
+      }, "primary");
+
+      function renderCandidates() {
+        const needle = query.trim().toLowerCase();
+        const rows = candidates.map((c, idx) => ({ c, idx })).filter(({ c }) => {
+          if (!needle) return true;
+          const hay = [
+            c.name, c.id, c.slot, c.quality, c.equip_id ? `#${c.equip_id}` : "", c.piece || "",
+            ...(c.affixes || []).map(a => `${a.name} ${a.description || ""}`),
+          ].filter(Boolean).join(" ").toLowerCase();
+          return hay.includes(needle);
+        });
+        if (!rows.length) {
+          grid.replaceChildren(node("p", {
+            className: "inv-empty",
+            text: candidates.length ? "没有匹配的物品，换个关键词试试。" : "你当前没有符合同品质同分类要求的可用物品。",
+          }));
+        } else {
+          grid.replaceChildren(...rows.map(({ c, idx }) => {
+            const isSel = idx === pickedIdx;
+            const isEq = listing.asset_type === "equipment";
+            const btn = button("", () => { pickedIdx = idx; renderCandidates(); },
+              "inv-card exchange-pick-card" + (isSel ? " is-selected" : ""),
+              { "data-grade": c.rarity });
+            btn.append(
+              node("span", { className: "inv-card-head" },
+                node("span", { className: "inv-card-name", text: isEq ? `${c.name} #${c.equip_id}` : c.name }),
+                node("span", { className: "inv-grade", text: isSel ? "✓ 已选" : (c.slot || c.rarity_label) }),
+              ),
+              isEq ? node("span", { className: "exchange-pick-sub", text: formatGearSummary(c) }) :
+                (c.quality ? node("span", { className: "exchange-pick-sub", text: `品相：${c.quality}` }) : null),
+              node("span", { className: "inv-card-meta" },
+                node("span", { text: isEq ? "闲置装备" : `可用 ×${format(c.quantity || 1)}` }),
+                node("span", { className: "inv-card-value", text: `消耗 ×${format(listing.quantity)}` }),
+              ),
+            );
+            return btn;
+          }));
+        }
+        confirmBtn.disabled = pickedIdx < 0 || !candidates[pickedIdx] || inRun;
+      }
+
+      const onSearch = ev => {
+        if (ev.isComposing) return;
+        query = searchInput.value;
+        renderCandidates();
+      };
+      searchInput.addEventListener("input", onSearch);
+      searchInput.addEventListener("compositionend", onSearch);
+
+      dialog.replaceChildren(
+        node("div", { className: "inv-detail-header", "data-grade": listing.rarity },
+          node("div", {},
+            node("p", { className: "inv-detail-meta", text: `${listing.rarity_label}${listing.category_label} · 挂单 #${listing.listing_id}` }),
+            node("h2", { id: "inventory-detail-title", text: `以物换物 · ${listing.item_name} ×${format(listing.quantity)}` }),
+          ),
+          button("关闭", closeDetail, "inv-detail-close", { "aria-label": "关闭" }),
+        ),
+        node("div", { className: "inv-detail-body exchange-picker-body" },
+          node("p", { className: "inv-detail-desc", text: `对方要求：${listing.want_item_name} ×${format(listing.quantity)}（须同品质同分类；虹彩须保留至少 1 件在仓）` }),
+          candidates.length > 4 ? searchInput : null,
+          grid, err,
+          node("div", { className: "inv-detail-actions" }, confirmBtn),
+        ),
+      );
+      renderCandidates();
+      if (!dialog.open) dialog.showModal();
+    }
+
+    // --- 3. Listings Filter, Search & Cards ---
+    const filterBar = node("div", { className: "inv-tabs exchange-filters" });
+    const listSearch = node("input", {
+      type: "search", className: "exchange-list-search",
+      value: selection.exListQuery || "", placeholder: "🔍 搜索挂单物品、期望交换物、卖家或 #单号…",
+      "aria-label": "搜索交易所挂单",
+    });
+    const listArea = node("div", { className: "exchange-grid" });
+    const filterModes = [["all", "全部"], ["public", "公开市场"], ["direct", "1对1交易"], ["mine", "我的挂单"]];
+
+    function renderList(fMode) {
+      selection.exFilter = fMode;
+      filterBar.replaceChildren(...filterModes.map(([id, label]) =>
+        button(label, () => renderList(id), "inv-tab", { "aria-pressed": String(id === fMode) })));
+      const needle = (selection.exListQuery || "").trim().toLowerCase();
+      const rows = (ex.listings || []).filter(r => {
+        const matchTab = fMode === "all" ? true : fMode === "mine" ? r.is_mine : r.scope === fMode;
+        if (!matchTab) return false;
+        if (!needle) return true;
+        const hay = [
+          `#${r.listing_id}`, r.item_name, r.want_item_name, r.seller_name,
+          r.rarity_label, r.category_label, ...(r.affixes || []).map(a => a.name),
+        ].filter(Boolean).join(" ").toLowerCase();
+        return hay.includes(needle);
+      });
+      if (!rows.length) {
+        listArea.replaceChildren(node("p", { className: "empty", text: needle ? "没有匹配的挂单。" : "当前分类暂无挂单。" }));
+        return;
+      }
+      listArea.replaceChildren(...rows.map(r => {
+        const actions = [];
+        if (r.is_mine) {
+          const cancelBtn = button("撤单取回", () => ctx.execute(control("撤单", "exchange_cancel", { listing_id: r.listing_id }), { inline: true }), "quiet small");
+          cancelBtn.disabled = inRun;
+          actions.push(cancelBtn);
+        } else {
+          if (r.mode === "gold" || r.mode === "both") {
+            const buyBtn = button(`💰 ${format(r.price_gold)} 金买`, () =>
+              ctx.execute(control("购买挂单", "exchange_buy", { listing_id: r.listing_id, pay_mode: "gold" }), { inline: true }), "primary small");
+            buyBtn.disabled = inRun || state.player.gold < r.price_gold;
+            actions.push(buyBtn);
+          }
+          if (r.mode === "barter" || r.mode === "both") {
+            const barterBtn = button("🔄 选物交换", () => openBarterDialog(r), r.mode === "both" ? "quiet small" : "primary small");
+            barterBtn.disabled = inRun;
+            actions.push(barterBtn);
+          }
+          if (r.is_for_me) {
+            const rejBtn = button("拒绝", () => ctx.execute(control("拒单", "exchange_reject", { listing_id: r.listing_id }), { inline: true }), "quiet small");
+            rejBtn.disabled = inRun;
+            actions.push(rejBtn);
+          }
+        }
+        const metaStats = r.stats ? Object.entries(r.stats).map(([k, v]) => `${ctx.statNames[k] || k}${v >= 0 ? "+" : ""}${v}`).join(" · ") : "";
+        const affixLine = r.affixes?.length ? "词条：" + r.affixes.map(a => a.name).join("、") : "";
+        const termsLines = [];
+        if (r.mode === "gold" || r.mode === "both") termsLines.push(`💰 售价：${format(r.price_gold)} 金`);
+        if (r.mode === "barter" || r.mode === "both") termsLines.push(`🔄 ${r.mode === "both" ? "或换取" : "换取"}：${r.want_item_name} ×${format(r.quantity)}`);
+        return node("article", { className: "panel exchange-card", "data-grade": r.rarity },
+          node("div", { className: "exchange-card-head" },
+            node("span", { className: "inv-grade-pill", "data-grade": r.rarity, text: `${r.rarity_label}${r.category_label}` }),
+            node("span", { className: "tag" + (r.is_for_me ? " hot" : ""), text: r.scope === "direct" ? (r.is_for_me ? "🤝 发给你的 1对1" : `🤝 1对1 → ${r.target_user_id}`) : "📢 公开" }),
+            r.mode === "both" ? node("span", { className: "tag", text: "金/换皆可" }) : null,
+            node("small", { text: `#${r.listing_id}` }),
+          ),
+          node("strong", { className: "exchange-item-title", text: `${r.item_name} ×${format(r.quantity)}` }),
+          metaStats ? node("p", { className: "item-facts", text: metaStats }) : null,
+          affixLine ? node("p", { className: "item-facts", text: affixLine }) : null,
+          node("div", { className: "exchange-terms-list" }, ...termsLines.map(t => node("p", { className: "exchange-terms", text: t }))),
+          node("div", { className: "exchange-card-foot" },
+            node("small", { text: `卖家：${r.is_mine ? "我" : r.seller_name}` }),
+            node("div", { className: "exchange-card-actions" }, ...actions),
+          ),
+        );
+      }));
+    }
+
+    const onListSearch = ev => {
+      if (ev.isComposing) return;
+      selection.exListQuery = listSearch.value;
+      renderList(selection.exFilter || "all");
+    };
+    listSearch.addEventListener("input", onListSearch);
+    listSearch.addEventListener("compositionend", onListSearch);
+
+    renderList(selection.exFilter || "all");
+    wrap.append(node("section", { className: "inv-list" },
+      node("div", { className: "inv-list-head" }, node("h2", { text: "玩家交易所" }),
+        node("span", { className: "inv-list-count", text: `${format((ex.listings || []).length)} 笔挂单` })),
+      filterBar, listSearch, listArea));
+    return wrap;
+  }
+
   function showMarket(ctx) {
     const { node, selection } = ctx;
     const main = node("div", { className: "inv-content" });
     function render(mode) {
       selection.market = mode;
+      if (mode === "exchange") {
+        main.replaceChildren(exchangePanel(ctx));
+        return;
+      }
       const shop = mode === "shop";
       main.replaceChildren(section(ctx, mode, shop ? "补给站" : "本周兑换",
         shop ? ctx.state.shop : ctx.state.market, { filter: true, sort: shop ? rows => [...rows].sort((a,b) => a.price-b.price) : sorted }));
     }
     render(selection.market || "shop");
-    return node("div", { className: "inventory" }, tabs(ctx, [["shop", "商店"], ["market", "黑市"]], selection.market, render), main);
+    return node("div", { className: "inventory" },
+      tabs(ctx, [["shop", "商店"], ["market", "黑市"], ["exchange", "交易所"]], selection.market, render), main);
   }
 
   function showAtlas(ctx) {

@@ -14,7 +14,7 @@ from hashlib import sha256
 from pathlib import Path
 from random import Random
 
-from . import combat, expedition, heirlooms
+from . import combat, exchange, expedition, heirlooms, prophecy
 from .catalog import Catalog, RARITIES, SLOTS, STAT_NAMES
 from .storage import GameMaintenance, Store, encode
 
@@ -86,6 +86,8 @@ COOLDOWNS = {
     "flare": 10, "support": 3, "rob": 2, "rescue": 2, "use": 2, "buy": 2, "shop": 2,
     "craft": 2, "decode": 2, "warehouse": 2, "sell": 2, "equipment": 2, "reroll": 2,
     "gallery": 5, "rank": 10, "all_rank": 10, "help": 5, "menu": 5,
+    "exchange": 2, "exchange_list": 2, "exchange_buy": 2, "exchange_cancel": 1, "exchange_reject": 1,
+    "prophecy": 2, "prophecy_start": 3, "prophecy_rank": 5,
 }
 
 COMMANDS = {
@@ -105,9 +107,16 @@ COMMANDS = {
     "wish_confirm":"wish_confirm", "wish_cancel":"wish_cancel",
     "field": "field_bag", "field_use": "use_field", "field_pick": "pick_field",
     "field_guide": "field_guide", "atlas": "atlas",
+    "exchange": "exchange_board", "exchange_list": "exchange_list", "exchange_buy": "exchange_buy",
+    "exchange_cancel": "exchange_cancel", "exchange_reject": "exchange_reject",
+    "prophecy": "prophecy_menu", "prophecy_start": "prophecy_start", "prophecy_rank": "prophecy_rank",
+    "prophecy_pick": "prophecy_pick",
 }
 
-OPEN_AI_COMMANDS = frozenset(k for k in COMMANDS if k not in {"confirm_order", "cancel_order","wish_confirm"})
+OPEN_AI_COMMANDS = frozenset(k for k in COMMANDS if k not in {
+    "confirm_order", "cancel_order", "wish_confirm",
+    "exchange_list", "exchange_buy", "exchange_cancel", "exchange_reject",
+})
 _GROUP_ONLY_ACTIONS = frozenset({"flare", "support", "blessing"})
 FIELD_CHOICE_FIRST = frozenset({"down", "rush", "fight", "flee", "extract", "event", "rob", "rescue", "leave", "flare"})
 ORDER_TTL = 600
@@ -399,6 +408,8 @@ class ElevatorGame:
         month = _clock(at).strftime("%Y-%m")
         with self.store.transaction() as db:
             _settle_months(db, month)
+            exchange.expire_listings(db, self.catalog, at, month)
+            prophecy.settle_completed_weeks(db, prophecy.week_key(at), self.catalog, at)
             stale = db.execute(
                 "SELECT a.user_id,a.group_id,p.nickname FROM active_runs a "
                 "JOIN players p USING(user_id) WHERE a.updated_at <= ?", (at - RUN_TIMEOUT,),
@@ -517,6 +528,7 @@ class Turn:
         clock = _clock(now)
         self.day, self.month = clock.date().isoformat(), clock.strftime("%Y-%m")
         self.week = f"{clock.isocalendar().year}-{clock.isocalendar().week}"
+        self.prophecy_week = prophecy.week_key(now)
         self.group_nick = name
         db.execute(
             "INSERT OR IGNORE INTO players(user_id,nickname) VALUES(?,?)",
@@ -542,23 +554,27 @@ class Turn:
         self._quest_notes: list[str] = []
         row = db.execute("SELECT * FROM active_runs WHERE user_id=?", (uid,)).fetchone()
         self.run = json.loads(row["payload"]) if row else None
-        if self.run:
+        if self.run and not self.run.get("prophecy"):
             repaired=expedition.repair_legacy_ring_shield(self.run)
             if not repaired and self.run.get("archive_version",0)<expedition.ARCHIVE_VERSION:
                 expedition.migrate_linear_ring(self.run)
-        if self.run is not None and self.run.get("rules_version",1)<2:
+        if self.run is not None and not self.run.get("prophecy") and self.run.get("rules_version",1)<2:
             old_max = max(1,self.run["stats"]["hp"])
             self.run["stats"],self.run["perks"] = self._stats()
             self.run["hp"] = min(self.run["stats"]["hp"],max(1,round(self.run["hp"]*self.run["stats"]["hp"]/old_max)))
             for item in self.run["bag"]+self.run["safe"]:
                 self.catalog.migrate_loose_gear(item)
             self._init_field()
-        if self.run and self.run.get("archive_version",0) < expedition.ARCHIVE_VERSION:
+        if self.run and not self.run.get("prophecy") and self.run.get("archive_version",0) < expedition.ARCHIVE_VERSION:
             old_max = max(1, self.run["stats"]["hp"])
             self.run["stats"], self.run["perks"] = self._stats()
             if self.run["hp"] > 0:
                 self.run["hp"] = max(1, min(self.run["stats"]["hp"], round(self.run["hp"]*self.run["stats"]["hp"]/old_max)))
             self.run["archive_version"] = expedition.ARCHIVE_VERSION
+        if self.run and self.run.get("prophecy") and self.run.get("prophecy_week") != self.prophecy_week:
+            self.finish_run(True, "本周星兆已轮换，上期试炼自动结算")
+        elif self.run and self.run.get("prophecy") and "star_ranks" not in self.run:
+            prophecy.migrate_stars(self.run, self.catalog)
         self.last_action = row["updated_at"] if row else now
         self.last_group = row["group_id"] if row else gid
         db.execute("INSERT OR IGNORE INTO season_stats(month,user_id) VALUES(?,?)", (self.month, uid))
@@ -584,9 +600,9 @@ class Turn:
 
     def expire(self) -> None:
         if self.run is not None and self.at - self.last_action >= RUN_TIMEOUT:
-            is_sim = bool(self.run.get("sim"))
+            is_trial = bool(self.run.get("sim") or self.run.get("prophecy"))
             text = self.finish_run(True, "久等没动静，电梯自动把你拉回了地面")
-            if not is_sim:
+            if not is_trial:
                 self.notice(self.uid, "\n".join(text.splitlines()[:2]))
         self.persist(touch=False)
 
@@ -617,7 +633,7 @@ class Turn:
         return quests
 
     def _advance_quest(self, kind: str, amount: int = 1) -> None:
-        if self.run and self.run.get("sim"):
+        if self.run and (self.run.get("sim") or self.run.get("prophecy")):
             return
         quests = self._load_quests()
         changed = False
@@ -677,6 +693,12 @@ class Turn:
                 text = text + "\n" + summary
         if options is None:
             options = self.actions()
+            if self.run and prophecy.star_offer(self.run):
+                options = tuple(
+                    Choice(f"嵌入{row['name']}（{row['label']} +{row['gain']}）", "prophecy_pick",
+                           f"{self.run['floor']} {row['id']}")
+                    for row in prophecy.star_rows(self.run) if row["offered"]
+                ) + options
         if self.gid.startswith("private:"):
             options = tuple(choice for choice in options if choice.action not in _GROUP_ONLY_ACTIONS)
         return Reply(text, options, bool(self.run) if plain is None else plain, **kwargs)
@@ -740,27 +762,50 @@ class Turn:
 
     def secondary_origins(self):
         origins={}
-        worn=self._worn_rows()
-        affix_groups={}
-        for item in worn:
-            for k in json.loads(item["affixes"]):
-                affix_groups.setdefault(k,[]).append(self.catalog.equipment[item["base_id"]]["name"])
-        for k,items in affix_groups.items():
-            label=f"{self.catalog.affixes[k]['name']}（{'、'.join(items)}，同款取最高）"
-            origins[k]=[(label,self.catalog.affixes[k]["power"])]
-        for k,n in self.catalog.gear_set_counts(row["base_id"] for row in worn).items():
-            suit=self.catalog.gear_sets[k]
-            for threshold,effect in suit["bonuses"].items():
-                if n>=int(threshold):
-                    for stat,value in effect.get("perks",{}).items():
-                        origins.setdefault(stat,[]).append((f"{suit['name']} · {threshold}件",value))
-        rainbow=self.catalog.rainbow
-        effects=[(v["name"],v) for k,v in rainbow.items() if k in self.archives]
-        if len(effects)==len(rainbow):
-            effects.append(("四彩共鸣",self.catalog.progression["resonance"]))
-        for name,effect in effects:
-            for stat,value in effect.get("perks",{}).items():
-                origins.setdefault(stat,[]).append((name,value))
+        if self.run and self.run.get("prophecy"):
+            cfg = prophecy.weekly_config(self.run["prophecy_week"], self.catalog)
+            affix_groups={}
+            for item in cfg["gear"]:
+                for k in item["affixes"]:
+                    affix_groups.setdefault(k,[]).append(item["name"])
+            for k,items in affix_groups.items():
+                label=f"{self.catalog.affixes[k]['name']}（{'、'.join(items)}，同款取最高）"
+                origins[k]=[(label,self.catalog.affixes[k]["power"])]
+            for k,n in self.catalog.gear_set_counts(item["base_id"] for item in cfg["gear"]).items():
+                suit=self.catalog.gear_sets[k]
+                for threshold,effect in suit["bonuses"].items():
+                    if n>=int(threshold):
+                        for stat,value in effect.get("perks",{}).items():
+                            origins.setdefault(stat,[]).append((f"{suit['name']} · {threshold}件",value))
+            rainbow=self.catalog.rainbow
+            effects=[(rainbow[k]["name"],rainbow[k]) for k in cfg["rainbows"] if k in rainbow]
+            if len(effects)==len(rainbow):
+                effects.append(("四彩共鸣",self.catalog.progression["resonance"]))
+            for name,effect in effects:
+                for stat,value in effect.get("perks",{}).items():
+                    origins.setdefault(stat,[]).append((name,value))
+        else:
+            worn=self._worn_rows()
+            affix_groups={}
+            for item in worn:
+                for k in json.loads(item["affixes"]):
+                    affix_groups.setdefault(k,[]).append(self.catalog.equipment[item["base_id"]]["name"])
+            for k,items in affix_groups.items():
+                label=f"{self.catalog.affixes[k]['name']}（{'、'.join(items)}，同款取最高）"
+                origins[k]=[(label,self.catalog.affixes[k]["power"])]
+            for k,n in self.catalog.gear_set_counts(row["base_id"] for row in worn).items():
+                suit=self.catalog.gear_sets[k]
+                for threshold,effect in suit["bonuses"].items():
+                    if n>=int(threshold):
+                        for stat,value in effect.get("perks",{}).items():
+                            origins.setdefault(stat,[]).append((f"{suit['name']} · {threshold}件",value))
+            rainbow=self.catalog.rainbow
+            effects=[(v["name"],v) for k,v in rainbow.items() if k in self.archives]
+            if len(effects)==len(rainbow):
+                effects.append(("四彩共鸣",self.catalog.progression["resonance"]))
+            for name,effect in effects:
+                for stat,value in effect.get("perks",{}).items():
+                    origins.setdefault(stat,[]).append((name,value))
         if self.run:
             active=[k for k,end in self.run.get("field_buffs",{}).items() if end>=self.run["floor"]]
             active.extend(k for k in expedition.field_slots(self.run) if k)
@@ -788,10 +833,11 @@ class Turn:
     def _charge(self, amount: int) -> None:
         if amount <= 0:
             return
-        if self.run and self.run.get("sim"):
+        if self.run and (self.run.get("sim") or self.run.get("prophecy")):
             sim_gold = int(self.run.get("sim_gold", 0))
             if sim_gold < amount:
-                raise GameError(f"🧪 模拟测试币不足（需 {amount:,}，当前剩 {sim_gold:,}）。")
+                label = "✦ 寓言试炼币" if self.run.get("prophecy") else "🧪 模拟测试币"
+                raise GameError(f"{label}不足（需 {amount:,}，当前剩 {sim_gold:,}）。")
             self.run["sim_gold"] = sim_gold - amount
             return
         if self.player["gold"] < amount:
@@ -1090,12 +1136,26 @@ class Turn:
         intro = "🧪 【模拟战开启】0消耗/不带出/不计榜，已配发免费演习包（冰美式×2、烟雾弹、护盾、脉冲雷）+ 10,000 模拟币。\n"
         return self.reply(intro + self._enter_floor())
 
+    def _is_prophecy(self) -> bool:
+        return bool(self.run and self.run.get("prophecy"))
+
+    def encounter_events(self):
+        return self.catalog.prophecy_events if self._is_prophecy() else self.catalog.events
+
+    def _world_rng(self, tag: str, floor: int | None = None) -> Random:
+        if self.run and self.run.get("prophecy"):
+            f = self.run["floor"] if floor is None else floor
+            return prophecy.world_rng(self.run["prophecy_week"], f, tag)
+        return self.rng
+
     def _map_title(self) -> str:
+        if self.run and self.run.get("prophecy"):
+            return f"✦ {prophecy.TITLE} F{self.run['floor']}/{prophecy.MAX_FLOOR}"
         prefix = "🧪 模拟 · " if self.run and self.run.get("sim") else ""
         return f"{prefix}{self.catalog.maps[self.run['map']]['name']} F{self.run['floor']}"
 
     def _eligible_relics(self, floor: int) -> list[sqlite3.Row]:
-        if self.run and self.run.get("sim"):
+        if self.run and (self.run.get("sim") or self.run.get("prophecy")):
             return []
         return self.db.execute(
             "SELECT * FROM relics WHERE map_id=? AND floor BETWEEN ? AND ? AND owner_id<>? "
@@ -1131,11 +1191,15 @@ class Turn:
             bonus = min(weights["loot"], weights["relic"] * perks.get("vulture", 0))
             weights["relic"] += bonus
             weights["loot"] -= bonus
+        if self._is_prophecy():
+            extra_elite = min(weights["loot"] * 0.5, weights["elite"] * 0.55)
+            weights["elite"] += extra_elite
+            weights["loot"] -= extra_elite
         return weights
 
     def _event_roll(self, floor: int) -> str:
         weights = self._event_weights(floor)
-        return self.rng.choices(list(weights), list(weights.values()))[0]
+        return self._world_rng("room", floor).choices(list(weights), list(weights.values()))[0]
 
     def _rare_rate(self, floor: int, *, chest: bool = True, blessing: bool | None = None) -> float:
         run = self.run
@@ -1151,6 +1215,8 @@ class Turn:
             self.note_limit(f"本层{source}战利品的基础金红率已达 {expedition.RARE_CAP:.0%} 上限，额外爆率加成不会再提高本层这项判定。升档另算。")
 
     def _golden_rain_active(self) -> bool:
+        if self._is_prophecy():
+            return False
         return self.db.execute("SELECT 1 FROM group_buffs WHERE group_id=? AND expires_at>?",
                                (self.gid, self.at)).fetchone() is not None
 
@@ -1158,12 +1224,14 @@ class Turn:
         run = self.run
         if run is None:
             return ""
+        if run.get("prophecy") and run["floor"] >= prophecy.MAX_FLOOR:
+            return f"✦ 已抵达【{prophecy.TITLE}】最高层 F{prophecy.MAX_FLOOR}！"
         next_f = run["floor"] + 1
         info = self.catalog.maps[run["map"]]
-        if expedition.boss_number(next_f):
+        if (prophecy.boss_number(next_f) if run.get("prophecy") else expedition.boss_number(next_f)):
             return f"📊 F{next_f} 必遇首领。可以先整备局内道具，击败后回满生命。"
         ambush_note = ""
-        if info.get("ambush_rate") and run["floor"] >= info.get("ambush_floor", 0):
+        if not run.get("prophecy") and info.get("ambush_rate") and run["floor"] >= info.get("ambush_floor", 0):
             if run.get("combat_cleared_floor") == run["floor"]:
                 ambush_note = "｜本层已清怪，撤离无伏击"
             else:
@@ -1257,7 +1325,8 @@ class Turn:
         return f"{cost_prefix}100%→{gain_text}"
 
     def _known_next_room(self):
-        if expedition.boss_number(self.run["floor"]+1):
+        next_floor = self.run["floor"] + 1
+        if (prophecy.boss_number(next_floor) if self._is_prophecy() else expedition.boss_number(next_floor)):
             return "首领房"
         if self.run["gold_room"]:
             return "隐藏金库"
@@ -1303,6 +1372,8 @@ class Turn:
         reds = [self.catalog.name(item) for item in items if self.catalog.rarity(item) == "red"]
         if not reds:
             return ""
+        if self.run.get("prophecy"):
+            return "\n✦ [星兆] 闪出红光——试炼摸到传世红【" + "、".join(reds) + "】（寓言集零带出，仅计估值）"
         if self.run.get("sim"):
             return "\n🧪 [模拟] 闪出红光——模拟摸到传世红【" + "、".join(reds) + "】（模拟战不带出）"
         return "\n🟥 警报！电梯里闪出刺眼红光——摸到传世红【" + "、".join(reds) + "】！赶紧「存箱」防翻车！"
@@ -1311,18 +1382,21 @@ class Turn:
         has_blessing = self._golden_rain_active()
         if count:
             self._note_rare_limit(chest=chest, blessing=has_blessing)
+        loot_rng = self._world_rng(f"loot:{'chest' if chest else 'drop'}:{boost}:{minimum}")
         loot = []
         for index in range(count):
             bonus = 0
             if chest and index == 0 and self.run["lockpick"]:
                 bonus = 1
                 self.run["lockpick"] = False
-            loot.append(self.catalog.loot(self.run, self.rng, chest=chest, blessing=has_blessing,
+            loot.append(self.catalog.loot(self.run, loot_rng, chest=chest, blessing=has_blessing,
                                           boost=boost + bonus, minimum=minimum))
         self._first_drop_bonus(loot)
         return loot
 
     def _first_drop_bonus(self, loot):
+        if self._is_prophecy():
+            return
         info = self.catalog.maps[self.run["map"]]
         if info.get("guaranteed_equipment") and not self.run["guaranteed_loot"]:
             self.run["guaranteed_loot"] = True
@@ -1330,6 +1404,8 @@ class Turn:
 
     def _enter_floor(self) -> str:
         run = self.run
+        if run.get("prophecy"):
+            prophecy.refresh_stars(run)
         if run.get("radar_floor", run["floor"]+1) <= run["floor"]:
             run.pop("radar_floor",None)
         adventure = run.get("adventure")
@@ -1350,19 +1426,24 @@ class Turn:
             if not treatment["left"]:
                 del run["med_regen"]
         before = run.get("field_items", {}).copy()
-        field_note = expedition.enter_field(run,self.catalog.field_items)
+        field_pool = prophecy.filter_field_items(self.catalog) if run.get("prophecy") else self.catalog.field_items
+        field_note = expedition.enter_field(run, field_pool)
         for key, quantity in run.get("field_items", {}).items():
             gained = quantity - before.get(key, 0)
             if gained > 0:
                 result["field"][key] = result["field"].get(key, 0) + gained
         body = self._floor_encounter() + treatment_note
+        if options := prophecy.star_offer(run):
+            names = "、".join(prophecy.STAR_RELICS[k][0] for k in options)
+            body += f"\n✦ 本层星匣：{names}。可嵌入一件，离层即错过。"
         if run.get("field_offer"):
             return body + "\n" + self._field_offer_text()
         return body + ("\n"+field_note if field_note else "")
 
     def _floor_encounter(self) -> str:
         run = self.run
-        if not run.get("sim"):
+        is_prophecy = bool(run.get("prophecy"))
+        if not run.get("sim") and not is_prophecy:
             self.db.execute(
                 "UPDATE season_stats SET max_floor=?,floor_value=0 WHERE month=? AND user_id=? AND max_floor<?",
                 (run["floor"], self.month, self.uid, run["floor"]),
@@ -1370,8 +1451,12 @@ class Turn:
             self._record_map_progress(run)
         run["event"] = {"kind": "ready"}
         self._advance_quest("floors", 1)
-        if expedition.boss_number(run["floor"]):
-            enemy = combat.monster(self.catalog.maps[run["map"]],run["floor"],self.rng,boss=True)
+        if expedition.boss_number(run["floor"]) or (is_prophecy and run["floor"] == prophecy.MAX_FLOOR):
+            boss_rng = self._world_rng("boss")
+            if is_prophecy:
+                enemy = prophecy.make_monster(self.catalog, run["map"], run["floor"], boss_rng, boss=True)
+            else:
+                enemy = combat.monster(self.catalog.maps[run["map"]],run["floor"],boss_rng,boss=True)
             run["event"] = {"kind":"combat","enemy":enemy}
             boss_intros = (
                 "整条井道的灯光骤然熄灭，应急红灯缓缓亮起——",
@@ -1379,6 +1464,11 @@ class Turn:
                 "铁门刚滑开半掌，一股沉重的压迫感扑面而来——",
             )
             first_note = "你先手" if combat.agility(run) >= enemy["agi"] else "首领先手"
+            if is_prophecy:
+                return (f"👑 {boss_rng.choice(boss_intros)}\n"
+                        f"{self._map_title()}星渊霸主【{enemy['name']}】降临！"
+                        f"（{enemy['hp']:,} HP · 攻 {enemy['atk']:,} · 防 {enemy['def']:,} · 敏 {enemy['agi']}，{first_note}）\n"
+                        f"每 4 回合重击 ×{expedition.BOSS_HEAVY:g} 后可整备。击败回满血（寓言集不产出虹彩、闪耀与可带出物资）。")
             return (f"👑 {self.rng.choice(boss_intros)}\n"
                     f"{self._map_title()}守门霸主【{enemy['name']}】横身挡路！"
                     f"（{enemy['hp']} HP · 攻 {enemy['atk']} · 防 {enemy['def']} · 敏 {enemy['agi']}，{first_note}）\n"
@@ -1407,12 +1497,13 @@ class Turn:
                 text += self._tip(TIP_RELIC, "「舔包」全塞临时背包（得活着带出）；「捞尸」直接寄还失主并拿现金赏金。")
             elif kind in ("loot", "relic"):
                 self._floor_result()["title"] = "打开宝箱"
+                flavor_rng = self._world_rng("flavor")
                 items = self._loot(chest=True)
                 top_rarity = max((RARITIES.index(self.catalog.rarity(item)) for item in items), default=0)
                 if top_rarity >= 5:
                     lead = "🚨 门缝炸出刺眼红光！手别抖，摸到："
                 elif top_rarity == 4:
-                    lead = self.rng.choice(("✨ 盒缝漏出一道金光——出金了！摸到：", "✨ 手感沉得不对劲，掀开居然是大金！摸到："))
+                    lead = flavor_rng.choice(("✨ 盒缝漏出一道金光——出金了！摸到：", "✨ 手感沉得不对劲，掀开居然是大金！摸到："))
                 else:
                     scenes = {
                         "mall": ("📦 翻开落灰货架，顺手摸出：", "📦 撬开半掩的收银台，翻出：", "📦 掀开花车盖布，底下压着："),
@@ -1420,38 +1511,45 @@ class Turn:
                         "abyss": ("📦 拉开未上锁的恒温柜，取出：", "📦 撬开防爆样本箱，里头躺着：", "📦 翻开凌乱的实验台抽屉，摸出："),
                         "auction": ("📦 掀开丝绒展台幕布，摸走：", "📦 撬开贵宾包厢暗格，翻出：", "📦 打开落拍流拍箱，里头竟躺着："),
                     }.get(run["map"], ("📦 撬开角落的箱子，摸出：",))
-                    lead = self.rng.choice(scenes)
+                    lead = flavor_rng.choice(scenes)
                 self._advance_quest("chests", 1)
                 text = lead + self._items_text(items) + self._give(items)
-                if top_rarity >= 2:
+                if top_rarity >= 2 and not is_prophecy:
                     text += self._tip(TIP_SAFEBOX, "好货怕翻车？发「存箱」就能把最贵的锁进安全箱。")
             elif kind in ("elite", "normal"):
-                enemy = combat.monster(self.catalog.maps[run["map"]], run["floor"], self.rng, elite=kind == "elite")
+                mon_rng = self._world_rng("monster")
+                if is_prophecy:
+                    enemy = prophecy.make_monster(self.catalog, run["map"], run["floor"], mon_rng, elite=kind == "elite")
+                else:
+                    enemy = combat.monster(self.catalog.maps[run["map"]], run["floor"], mon_rng, elite=kind == "elite")
                 run["event"] = {"kind": "combat", "enemy": enemy}
                 first_note = "你先手" if combat.agility(run) >= enemy["agi"] else "怪先手"
-                stat_tag = f"{enemy['hp']} HP · 攻 {enemy['atk']} · 敏 {enemy['agi']}({first_note})"
+                stat_tag = f"{enemy['hp']:,} HP · 攻 {enemy['atk']:,} · 防 {enemy['def']:,} · 敏 {enemy['agi']}({first_note})"
                 if enemy["elite"]:
-                    text = self.rng.choice((
+                    text = mon_rng.choice((
                         f"👹 电梯顶灯骤然变红！守层狠角色【{enemy['name']}】（{stat_tag}）横在了正前方。",
                         f"👹 地面微微发震，【{enemy['name']}】（{stat_tag}）盯着电梯口缓缓逼近。",
                     ))
                 else:
-                    text = self.rng.choice((
+                    text = mon_rng.choice((
                         f"👾 电梯门刚滑开，【{enemy['name']}】（{stat_tag}）迎面撞了过来。",
                         f"👾 走廊尽头闪出黑影，【{enemy['name']}】（{stat_tag}）死死堵住去路。",
                         f"👾 脚底踩响了空罐头，惊动了角落的【{enemy['name']}】（{stat_tag}）。",
                     ))
-                text += self._tip(TIP_COMBAT, "回「打」一次出战报，打不过就回「跑」，遇精英还能「摇人」白嫖群友帮打。")
+                if not is_prophecy:
+                    text += self._tip(TIP_COMBAT, "回「打」一次出战报，打不过就回「跑」，遇精英还能「摇人」白嫖群友帮打。")
             else:
-                config = self.rng.choice(list(self.catalog.events.values()))
+                ev_rng = self._world_rng("choice")
+                config = ev_rng.choice(list(self.encounter_events().values()))
                 run["event"] = {"kind": "choice", "id": config["id"]}
                 if config.get("guess"):
-                    run["event"]["secret"] = self.rng.randint(1, 3)
+                    run["event"]["secret"] = ev_rng.randint(1, 3)
                 text = f"🎲 {config['name']}\n{config['text']}"
                 if config.get("offer"):
-                    offer = (self.catalog.roll_gear(self.rng, self.rng.choice(("green", "blue", "purple")))
-                             if self.rng.random() < 0.45 else self.catalog.ordinary_item(
-                                 self.rng.choice(("coffee", "smoke", "ice_tea", "pouch")), self.rng))
+                    offer = (self.catalog.roll_gear(ev_rng, ev_rng.choice(("green", "blue", "purple")))
+                             if ev_rng.random() < 0.45 else self.catalog.ordinary_item(
+                                 ev_rng.choice(("coffee", "ice_tea", "pouch") if is_prophecy else
+                                               ("coffee", "smoke", "ice_tea", "pouch")), ev_rng))
                     run["event"].update(offer=offer, price=max(1, int(offer["value"] * 0.70)))
                     brief = ITEM_BRIEFS.get(offer["id"], "")
                     brief_note = f"（{brief}）" if brief else ""
@@ -1478,6 +1576,8 @@ class Turn:
         run = self._check_run()
         if run["event"]["kind"] != "ready":
             raise GameError("眼前这摊事还没解决呢，先处理完再按下一层。")
+        if run.get("prophecy") and run["floor"] >= prophecy.MAX_FLOOR:
+            return self.reply(self.finish_run(True, f"登顶【{prophecy.TITLE}】F{prophecy.MAX_FLOOR} 终层"))
         run["floor"] += 1
         return self.reply(self._enter_floor())
 
@@ -1520,7 +1620,7 @@ class Turn:
     def _rush_adventure(self, floor_limit: int, row: dict) -> str:
         run = self.run
         pending = run["event"]
-        event = self.catalog.events[pending["id"]]
+        event = self.encounter_events()[pending["id"]]
         floor = run["floor"]
         if self.rush_event_mode == "random":
             budget = run["sim_gold"] if run.get("sim") else self.player["gold"]
@@ -1554,6 +1654,10 @@ class Turn:
         steps = int(text) if text else self.rush_floors
         first = run["floor"]+1
         floor_limit = run["floor"] + steps
+        if run.get("prophecy"):
+            if run["floor"] >= prophecy.MAX_FLOOR:
+                return self.reply(self.finish_run(True, f"登顶【{prophecy.TITLE}】F{prophecy.MAX_FLOOR} 终层"))
+            floor_limit = min(floor_limit, prophecy.MAX_FLOOR)
         lines = []
         self.last_rush = {"floors": [], "reason": "达到所选层数"}
         jumped = stop_after_landing = False
@@ -1571,6 +1675,10 @@ class Turn:
             body=self._enter_floor()
             row = self._floor_result()
             self.last_rush["floors"].append(row)
+            if prophecy.star_offer(run):
+                self.last_rush["reason"] = "发现试炼星匣"
+                lines.append(body)
+                break
             if run.get("field_offer"):
                 enemy = run["event"].get("enemy", {})
                 encounter = "遇到首领，" if enemy.get("boss") else "遇到精英，" if enemy.get("elite") else ""
@@ -1623,7 +1731,7 @@ class Turn:
                     break
                 stop_after_landing = True
             info=self.catalog.maps[run["map"]]
-            if (not stop_after_landing and info["ambush_rate"] and floor==info["ambush_floor"]
+            if (not run.get("prophecy") and not stop_after_landing and info["ambush_rate"] and floor==info["ambush_floor"]
                     and run["combat_cleared_floor"]!=floor):
                 self.last_rush["reason"] = "抵达伏击起始层"
                 lines.append("⚠️ 已到撤离伏击起始层，先决定去留。")
@@ -1651,7 +1759,7 @@ class Turn:
             if self.run["event"].get("enemy") is not enemy or enemy["hp"] or self.run.get("paid_boss_floor")==self.run["floor"]:
                 raise GameError("该首领的胜利已经结算。")
             self.run["paid_boss_floor"] = self.run["floor"]
-            if not self.run.get("sim"):
+            if not self.run.get("sim") and not self.run.get("prophecy"):
                 focus=self.run.get("heirloom_focus")
                 if not focus:
                     raise GameError("本旧局尚未登记追寻池，请先发「追寻 1 8」或在网页选择两套，再挑战首领。")
@@ -1665,9 +1773,9 @@ class Turn:
                     piece=heirlooms.PIECES[reward]
                     lines.append(f"✨【闪耀掉落】{heirlooms.SETS[piece['set']]['name']}·{piece['name']}（"+
                                  ("首次点亮，已入祝福库，下局整备可装" if first else "重复件，已入祝福库")+"）")
-            items = self.catalog.boss_rewards(self.run,self.rng,boss)
+            items = self.catalog.boss_rewards(self.run,self._world_rng("boss_loot"),boss)
             self._first_drop_bonus(items)
-            if not self.run.get("sim") and self.rng.random()<expedition.RAINBOW_CHANCE:
+            if not self.run.get("sim") and not self.run.get("prophecy") and self.rng.random()<expedition.RAINBOW_CHANCE:
                 key = self.rng.choice(tuple(self.catalog.rainbow))
                 skill = self.catalog.rainbow[key]
                 first = key not in self.archives
@@ -1691,8 +1799,9 @@ class Turn:
             self.run["hp"] = self.run["stats"]["hp"]
             lines.append(f"👑 漂亮！首领轰然倒地，紧绷的神经瞬间放松——生命全额回满至 {self.run['hp']} HP！")
         else:
+            boost_rng = self._world_rng("elite_boost")
             items = self._loot(2 if enemy["elite"] else 1, chest=False,
-                               boost=(1 if self.rng.random()<.72 else 2) if enemy["elite"] else 0)
+                               boost=(1 if boost_rng.random()<.72 else 2) if enemy["elite"] else 0)
         if not boss and self.run["perks"].get("vampire"):
             healed = self._heal(self.run["perks"]["vampire"])
             if healed:
@@ -1707,6 +1816,8 @@ class Turn:
         self._clear_event()
         if enemy["ambush"]:
             lines.append(self.finish_run(True, "放倒守门怪、冲出伏击"))
+        elif self.run.get("prophecy") and self.run["floor"] >= prophecy.MAX_FLOOR:
+            lines.append(self.finish_run(True, f"斩落 F{prophecy.MAX_FLOOR} 星渊终主，登顶群星尽头"))
         return "\n".join(lines)
 
     def _record_battle_log(self, enemy: dict, report: combat.FightResult) -> str:
@@ -1750,7 +1861,7 @@ class Turn:
         return self.reply(log_text, (), count_cooldown=False, forward_title="详细战报")
 
     def _fight(self, enemy: dict, prefix: str = "") -> Reply:
-        report = combat.fight(self.run, enemy, self.rng)
+        report = combat.fight(self.run, enemy, self._world_rng(f"combat:{enemy.get('rounds_fought', 0)}"))
         self._record_battle_log(enemy, report)
         if not self.run["hp"]:
             headline = f"⚔️ 死撑 {report.rounds} 回合倒在了【{enemy['name']}】面前"
@@ -1806,7 +1917,7 @@ class Turn:
             raise GameError("守门怪死死扒着电梯门，只能硬刚放倒它，或者甩颗烟雾弹脱身。")
         if enemy.get("boss"):
             raise GameError("首领把向下的路堵得水泄不通，硬溜可溜不过去！想保命可以直接「撤离」或甩颗烟雾弹，要不就磕药整备再干！")
-        if self.rng.random() < combat.flee_rate(self.run):
+        if self._world_rng(f"flee:{enemy.get('rounds_fought', 0)}").random() < combat.flee_rate(self.run):
             self._clear_event()
             return self.reply("💨 脚底抹油无伤脱身！还在这一层，趁现在决定走还是留。")
         had_last_stand = bool(self.run["last_stand"])
@@ -1823,6 +1934,8 @@ class Turn:
         run = self._check_run()
         if run["event"]["kind"] == "combat" and run["event"]["enemy"]["ambush"]:
             raise GameError("电梯门被守门怪扒住了！打赢它或者扔颗烟雾弹就能撤。")
+        if run.get("prophecy"):
+            return self.reply(self.finish_run(True))
         info = self.catalog.maps[run["map"]]
         if run.get("combat_cleared_floor") == run["floor"]:
             return self.reply(self.finish_run(True))
@@ -1874,6 +1987,46 @@ class Turn:
         run = self.run
         if extracted and run["hp"] <= 0:
             return self.fallen()
+        if run.get("prophecy"):
+            self._release_relic()
+            self.db.execute("DELETE FROM signals WHERE owner_id=?", (self.uid,))
+            week = run["prophecy_week"]
+            floor = run["floor"]
+            cleared = (
+                floor if (run["event"]["kind"] == "ready" or run.get("combat_cleared_floor") == floor
+                          or (extracted and run["event"]["kind"] != "combat"))
+                else max(0, floor - 1)
+            )
+            if prophecy.boss_number(floor) and run.get("combat_cleared_floor") != floor:
+                cleared = floor - 1
+            trial_items = [] if forfeit_safe else [it for it in (*run["safe"], *run["bag"]) if not it.get("sim_kit")]
+            val = self._value(trial_items)
+            improved = prophecy.record_score(
+                self.db, week, self.uid, self.player["nickname"],
+                max_floor=floor, cleared_floor=cleared, value=val, extracted=extracted, now=self.at,
+            )
+            record = prophecy.player_record(self.db, week, self.uid)
+            self.run = None
+            self.last_departure = {
+                "floor": floor, "cleared_floor": cleared, "extracted": extracted,
+                "simulation": True, "prophecy": True, "week": week,
+                "units": len(trial_items), "value": val, "protected_by_doll": protected_by_doll,
+            }
+            if cleared >= prophecy.MAX_FLOOR and extracted:
+                head = f"👑✦ 【{prophecy.TITLE} · 登顶 F{prophecy.MAX_FLOOR}】星海为你加冕！"
+            elif extracted:
+                lead = f"{reason}，" if reason else "星门缓缓闭合，"
+                head = f"✦ 【{prophecy.TITLE}结束】{lead}止步 F{floor}（已通过 F{cleared} · 剩 {run['hp']}/{run['stats']['hp']} HP）"
+            else:
+                head = f"✦ 【{prophecy.TITLE}阵亡】止步 F{floor}（已通过 F{cleared}）！"
+            rank_line = f"本周全服排名：第 {record['rank']} 名" if record else ""
+            pb_note = " · 🎉 刷新个人本周最佳纪录！" if improved else ""
+            return (
+                f"{head}\n"
+                f"本期星兆：{week} · {run.get('prophecy_name', '')}\n"
+                f"{rank_line}{pb_note}\n"
+                f"本局搜获估值 {val:,} 金（0 消耗 · 零带出，不产出虹彩/闪耀/物资 · 发「寓言榜」查看周榜）"
+            )
         if run.get("sim"):
             self._release_relic()
             self.db.execute("DELETE FROM signals WHERE owner_id=?", (self.uid,))
@@ -1989,7 +2142,7 @@ class Turn:
             enemy = pending["enemy"]
             if enemy.get("boss"):
                 choices = [Choice("挑战首领","fight"),Choice("局内道具","field"),Choice("用药","use")]
-                if not run["sos_used"] and not run.get("sim") and not self._signal_active():
+                if not run["sos_used"] and not run.get("sim") and not run.get("prophecy") and not self._signal_active():
                     choices.append(Choice("摇人","flare"))
                 if not enemy["ambush"]: choices.append(withdraw)
                 return tuple(choices)
@@ -1997,7 +2150,7 @@ class Turn:
                 waiting = (Choice("背包", "bag"), Choice("存箱", "save_box"), Choice("用药", "use"))
                 return waiting if enemy["ambush"] else (*waiting, withdraw)
             result = [Choice("硬刚（打）", "fight")]
-            if (enemy["elite"] or enemy["ambush"]) and not run["sos_used"]:
+            if (enemy["elite"] or enemy["ambush"]) and not run["sos_used"] and not run.get("prophecy"):
                 result.append(Choice("摇人", "flare"))
             if not enemy["ambush"]:
                 result.append(Choice(f"溜走（{combat.flee_rate(run):.0%}）", "flee"))
@@ -2010,7 +2163,7 @@ class Turn:
             return (Choice("舔包（装入临时背包）", "rob"), Choice("捞尸（寄还并领取赏金）", "rescue"),
                     Choice("离开", "leave"), withdraw)
         if pending["kind"] == "choice":
-            event = self.catalog.events[pending["id"]]
+            event = self.encounter_events()[pending["id"]]
             options = tuple(Choice(option["label"], "event", str(index))
                             for index, option in enumerate(event["choices"], 1))
             return (*options, withdraw) if len(options) < 4 else options
@@ -2441,7 +2594,7 @@ class Turn:
         pending = run["event"]
         if pending["kind"] != "choice":
             raise GameError("现在没有待选择的奇遇。")
-        config = self.catalog.events[pending["id"]]
+        config = self.encounter_events()[pending["id"]]
         options = config["choices"]
         if text.isascii() and text.isdigit() and 1 <= int(text) <= len(options):
             option = options[int(text) - 1]
@@ -2470,11 +2623,12 @@ class Turn:
             if not run["hp"]:
                 record("failure", ["支付奇遇的生命代价后，生命耗尽。"])
                 return self.reply(self.fallen())
+        ev_rng = self._world_rng(f"event:{option['label']}")
         if "guess" in option:
             success = pending["secret"] == option["guess"]
         elif option.get("agi_check") or "chance" in option:
             base = option.get("chance", 0.48 + combat.agility(run) * 0.012 - run["floor"] * 0.018)
-            success = self.rng.random() < combat.clamp(base + run["event_bonus"], 0.10, 0.94)
+            success = ev_rng.random() < combat.clamp(base + run["event_bonus"], 0.10, 0.94)
         else:
             success = True
         self._advance_quest("events", 1)
@@ -2501,9 +2655,9 @@ class Turn:
         if option.get("loot"):
             items.extend(self._loot(option["loot"], chest=True, minimum=option.get("min_rarity", "white")))
         if option.get("random_supply"):
-            picked = self.rng.choice(option["random_supply"])
-            items.append(self.catalog.ordinary_item(picked, self.rng))
-        items += [self.catalog.ordinary_item(key, self.rng) for key in option.get("items", ())]
+            picked = ev_rng.choice(option["random_supply"])
+            items.append(self.catalog.ordinary_item(picked, ev_rng))
+        items += [self.catalog.ordinary_item(key, ev_rng) for key in option.get("items", ())]
         if items:
             lines.append("🎁 到手：" + self._items_text(items) + self._give(items))
         notes = []
@@ -2533,7 +2687,10 @@ class Turn:
         lines.extend(notes)
         self._clear_event()
         if option.get("skip_floors"):
-            run["floor"] = expedition.landing(run["floor"],int(option["skip_floors"]))
+            target_floor = expedition.landing(run["floor"], int(option["skip_floors"]))
+            if run.get("prophecy"):
+                target_floor = min(prophecy.MAX_FLOOR, target_floor)
+            run["floor"] = target_floor
             lines.append(f"🚀 直降梯轰鸣下坠，一口气跳到第 {run['floor']} 层！")
             if enter_landing:
                 lines.append(self._enter_floor())
@@ -2543,6 +2700,8 @@ class Turn:
         return self.reply("\n".join(lines))
 
     def _check_flare(self) -> dict:
+        if self._is_prophecy():
+            raise GameError(f"【{prophecy.TITLE}】为单人实力试炼，不可摇人支援。")
         if self.gid.startswith("private:"):
             raise GameError("可以在已开放电梯的群里使用信号弹求援。道具已保留。")
         enemy = self._check_enemy()
@@ -2813,6 +2972,8 @@ class Turn:
             return chosen
         item = chosen.item
         key, label = item["id"], self.catalog.name(item, symbol=False)
+        if run.get("prophecy") and key in prophecy.EXIT_ITEMS:
+            raise GameError("星兆试炼内禁用直接撤离道具。")
         medicine = self.catalog.items[key].get("medicine")
         if medicine:
             return self._use_medicine(item, label, medicine)
@@ -2834,7 +2995,7 @@ class Turn:
             healed = self._heal(0.25, report_limit=True)
             run["tea_until"] = max(run["tea_until"], run["floor"] + 1)
             extra = ""
-            if self.rng.random() < 0.15:
+            if self._world_rng("ice_tea").random() < 0.15:
                 lost = combat.hurt(run, 8)
                 if not run["hp"]:
                     return self.reply("红茶喝得太急，打了个要命的嗝。\n" + self.fallen())
@@ -2904,7 +3065,10 @@ class Turn:
         if key == "warp_card":
             if run["event"]["kind"] != "ready":
                 raise GameError("眼前还有没处理完的事，解决了再刷直降电梯卡。")
-            run["floor"] = expedition.landing(run["floor"],2)
+            target_floor = expedition.landing(run["floor"], 2)
+            if run.get("prophecy"):
+                target_floor = min(prophecy.MAX_FLOOR, target_floor)
+            run["floor"] = target_floor
             body = self._enter_floor()
             peek = self._peek()
             return self.reply(f"🚀 滴——直降电梯卡生效，连跳两层！\n{body}\n📡 顺手扫了一眼更下面：下一层多半是「{peek}」。")
@@ -4028,8 +4192,8 @@ class Turn:
             "快捷：进 / 连进 / 打 / 跑 / 撤 / 战报 ｜ 改名发「改名 新昵称」",
         ]
         return self.reply("\n".join(lines),
-                          (Choice("下潜", "start"), Choice("模拟战", "simulate"),
-                           Choice("仓库", "warehouse"), Choice("商店", "shop"),
+                          (Choice("下潜", "start"), Choice("✦ 群星寓言集", "prophecy"), Choice("模拟战", "simulate"),
+                           Choice("交易所", "exchange"), Choice("仓库", "warehouse"), Choice("商店", "shop"),
                            Choice("装备", "equipment"), Choice("闪耀祝福","heirlooms"), Choice("黑市", "black_market"),
                            Choice("陈列室", "gallery"), Choice("悬赏", "quests"),
                            Choice("排行", "rank"), Choice("攻略", "help", "攻略")),
@@ -4525,3 +4689,443 @@ class Turn:
 
     def all_rank(self, text: str, _target: str) -> Reply:
         return self._board(text, all_groups=True)
+
+    # ============================================================ 来自群星的寓言集
+    def prophecy_menu(self, _text: str, _target: str) -> Reply:
+        prophecy.settle_completed_weeks(self.db, self.prophecy_week, self.catalog, self.at)
+        cfg = prophecy.weekly_config(self.prophecy_week, self.catalog)
+        unlock = prophecy.unlock_status(self.catalog, self.archives)
+        me = prophecy.player_record(self.db, self.prophecy_week, self.uid)
+        top = prophecy.leaderboard(self.db, self.prophecy_week, limit=3)
+        gear_line = " / ".join(f"{g['name']}({self.catalog.rarities[g['rarity']]['name']})" for g in cfg["gear"])
+        supply_line = "、".join(f"{s['name']}×{s['quantity']}" for s in cfg["supplies"])
+        lines = [
+            f"✦ 【{prophecy.TITLE}】{self.prophecy_week} · {cfg['name']}",
+            f"🌌 「{cfg['omen']}」",
+            f"⚡ 高难 AI 试炼 · 上限 F{prophecy.MAX_FLOOR} · 零费用入场 · 零带出（不产出虹彩/闪耀/物资）",
+            "────────────────────────",
+            f"⚔️ 本周固定配装：{gear_line}",
+            f"✨ 本周固定祝福（{len(cfg['blessings'])}槽）：{'、'.join(cfg['blessing_names']) or '无'}",
+            f"🌈 本周固定虹彩（{len(cfg['rainbows'])}件）：{'、'.join(cfg['rainbow_names']) or '无'}",
+            f"🎒 本周统一补给：{supply_line}",
+            prophecy.STAR_RULE,
+            f"📊 统一入场面板：HP {cfg['stats']['hp']} · 攻 {cfg['stats']['atk']} · 防 {cfg['stats']['def']} · 敏 {cfg['stats']['agi']} · 运 {cfg['stats']['luk']}",
+            "────────────────────────",
+            (
+                f"🔓 入场资格：已解锁（红/金藏品图鉴 {unlock['owned']}/{unlock['total']}）"
+                if unlock["unlocked"]
+                else f"🔒 入场资格：需集齐全部红/金藏品图鉴（当前 {unlock['owned']}/{unlock['total']}，还差 {unlock['missing_count']} 件：{'、'.join(unlock['missing_preview'])}）"
+            ),
+        ]
+        if self._is_prophecy():
+            lines.append("本局星器：" + " ｜ ".join(f"{r['name']} {r['rank']}阶（{r['label']} +{r['bonus']}）"
+                                                  for r in prophecy.star_rows(self.run)))
+        if me:
+            lines.append(f"🏅 本周个人纪录：全服第 {me['rank']} 名 · 推进 F{me['max_floor']}（通过 F{me['cleared_floor']} · 挑战 {me['attempts']} 次）")
+        if top:
+            lines.append("🏆 本周前三：" + " ｜ ".join(f"{i}.{r['nickname']}(F{r['cleared_floor']})" for i, r in enumerate(top, 1)))
+        choices = []
+        if unlock["unlocked"] and self.run is None:
+            choices.append(Choice("✦ 踏入星兆（免费挑战）", "prophecy_start"))
+        choices.extend((Choice("本周寓言榜", "prophecy_rank"), Choice("上周结算榜", "prophecy_rank", "上周"), Choice("返回大厅", "menu")))
+        return self.reply("\n".join(lines), tuple(choices), plain=True, as_image=True, forward_title=prophecy.TITLE, count_cooldown=False)
+
+    def prophecy_pick(self, text: str, _target: str) -> Reply:
+        run = self._check_run()
+        if not run.get("prophecy"):
+            raise GameError("星匣只会出现在群星寓言集试炼内。")
+        parts = text.split()
+        if len(parts) != 2 or not parts[0].isascii() or not parts[0].isdigit() or len(parts[0]) > 4:
+            raise GameError("用「嵌入星器 层数 星器名」选择当前星匣的一件。")
+        key = next((k for k, spec in prophecy.STAR_RELICS.items() if parts[1] == spec[0]), parts[1])
+        try:
+            note = prophecy.pick_star(run, int(parts[0]), key)
+        except ValueError as exc:
+            raise GameError(str(exc)) from exc
+        self._floor_result()["star"] = note
+        return self.reply(note, count_cooldown=False)
+
+    def prophecy_start(self, _text: str, _target: str) -> Reply:
+        if not self.player.get("name_confirmed") and self.player["runs"] == 0 and self.run is None:
+            return self._first_time_name_prompt()
+        self._check_idle()
+        prophecy.settle_completed_weeks(self.db, self.prophecy_week, self.catalog, self.at)
+        unlock = prophecy.unlock_status(self.catalog, self.archives)
+        if not unlock["unlocked"]:
+            missing = "、".join(unlock["missing_preview"])
+            raise GameError(
+                f"【{prophecy.TITLE}】需要集齐全部红、金藏品图鉴才可入场"
+                f"（当前 {unlock['owned']}/{unlock['total']}，还差 {unlock['missing_count']} 件，例如：{missing}）。"
+            )
+        cfg = prophecy.weekly_config(self.prophecy_week, self.catalog)
+        kit_rng = Random(f"prophecy:kit:{self.prophecy_week}")
+        kit = []
+        for entry in cfg["supplies"]:
+            for _ in range(entry["quantity"]):
+                it = self.catalog.ordinary_item(entry["id"], kit_rng)
+                it["sim_kit"] = True
+                kit.append(it)
+        stats = copy.deepcopy(cfg["stats"])
+        perks = dict(cfg["perks"])
+        self.run = {
+            "map": cfg["base_map"],
+            "prophecy": True,
+            "prophecy_week": self.prophecy_week,
+            "prophecy_name": cfg["name"],
+            "star_ranks": {},
+            "floor": 1,
+            "hp": stats["hp"],
+            "stats": stats,
+            "perks": perks,
+            "bag": kit,
+            "safe": [],
+            "safe_extra": 0,
+            "tea_until": 0,
+            "sos_used": False,
+            "last_stand": False,
+            "lockpick": False,
+            "peek": "",
+            "gold_room": False,
+            "guaranteed_loot": False,
+            "shield": int(perks.get("shield_start", 0)) + int(perks.get("prism_shield", 0)),
+            "atk_boost": 0.0,
+            "combat_cleared_floor": 0,
+            "last_killed_name": "",
+            "sim": False,
+            "sim_gold": 15000,
+            "value_bonus": 0.0,
+            "rare_bonus": 0.0,
+            "event_bonus": 0.0,
+            "field_seed": f"prophecy:{self.prophecy_week}",
+            "rules_version": 2,
+            "archive_version": expedition.ARCHIVE_VERSION,
+            "event": {"kind": "ready"},
+        }
+        intro = (
+            f"✦ ━━━ 星门开启 · 【{prophecy.TITLE}】 ━━━ ✦\n"
+            f"🌌 {self.prophecy_week} · {cfg['name']}（上限 F{prophecy.MAX_FLOOR} · 0 消耗 · 零带出）\n"
+            f"⚔️ 固定构筑：{' / '.join(g['name'] for g in cfg['gear'])}\n"
+            f"✨ 固定祝福：{'、'.join(cfg['blessing_names'])} ｜ 🌈 固定虹彩：{'、'.join(cfg['rainbow_names'])}\n"
+            f"{prophecy.STAR_RULE}\n"
+        )
+        return self.reply(intro + self._enter_floor())
+
+    def prophecy_rank(self, text: str, _target: str) -> Reply:
+        prophecy.settle_completed_weeks(self.db, self.prophecy_week, self.catalog, self.at)
+        query = text.strip()
+        if query in ("上周", "上期", "prev", "last"):
+            target_week = prophecy.previous_week_key(self.prophecy_week)
+            finished = True
+        elif query and len(query) <= 10 and "-W" in query.upper():
+            target_week = query.upper()
+            finished = target_week < self.prophecy_week
+        else:
+            target_week = self.prophecy_week
+            finished = False
+        settled_row = self.db.execute("SELECT summary FROM prophecy_settled WHERE week=?", (target_week,)).fetchone()
+        if settled_row is not None:
+            body = settled_row["summary"]
+        else:
+            try:
+                cfg = prophecy.weekly_config(target_week, self.catalog)
+            except Exception as exc:
+                raise GameError("周次格式无效，请输入如 2026-W48 或「上周」。") from exc
+            rows = prophecy.leaderboard(self.db, target_week, limit=15)
+            body = prophecy.format_board_text(target_week, cfg, rows, finished=finished)
+        choices = (
+            Choice("本周寓言榜", "prophecy_rank"),
+            Choice("上周结算榜", "prophecy_rank", "上周"),
+            Choice("寓言集详情", "prophecy"),
+        )
+        return self.reply(body, choices, plain=True, as_image=True, forward_title=f"{prophecy.TITLE}周榜", count_cooldown=False)
+
+    # ============================================================ 电梯交易所
+    def _resolve_exchange_stock(self, token: str) -> dict:
+        stock = self._stock()
+        if token.startswith("#") and token[1:].isdigit():
+            sid = int(token[1:])
+            row = next((r for r in stock if r["stock_id"] == sid), None)
+            if row is None:
+                raise GameError(f"仓库中找不到编号 {token} 的物品。")
+            return row
+        q = token.casefold()
+        matches = [
+            r for r in stock
+            if q == r["id"].casefold()
+            or q == self.catalog.name(r, symbol=False).casefold()
+            or q == self.catalog.definition(r["id"])["name"].casefold()
+            or q in {a.casefold() for a in self.catalog.definition(r["id"]).get("aliases", ())}
+        ]
+        if not matches:
+            raise GameError(f"仓库里找不到「{token}」，可用仓库编号（如 #12）或准确名称。")
+        return max(matches, key=lambda r: (r["quantity"], r["value"]))
+
+    def _resolve_exchange_equip(self, token: str) -> dict:
+        if not token.startswith("#") or not token[1:].isdigit():
+            raise GameError("挂单或交换装备请使用装备编号，例如「装备 #12」。")
+        eid = int(token[1:])
+        row = next((r.item for r in self._equipment_options() if r.item["equip_id"] == eid), None)
+        if row is None:
+            raise GameError(f"装备库中找不到装备 #{eid}。")
+        return row
+
+    def exchange_board(self, text: str, _target: str) -> Reply:
+        listings = exchange.visible_listings(self.db, self.catalog, self.uid, self.at, self.month)
+        mode = text.strip()
+        if mode in ("我的", "mine"):
+            filtered = [r for r in listings if r["is_mine"]]
+            title = "我的挂单"
+        elif mode in ("私密", "1对1", "定向", "direct"):
+            filtered = [r for r in listings if r["scope"] == "direct"]
+            title = "1 对 1 交易"
+        else:
+            filtered = listings
+            title = "交易所大厅"
+        page = _ItemPage.select(mode if mode.isdigit() else "", len(filtered), page_size=8)
+        lines = [
+            page.heading(f"⚖️ 无尽电梯交易所 · {title}"),
+            "规则：支持公开售卖与 1 对 1 交易；支持金币买卖、同品质以物换物或两者兼可；虹彩仅允许交易重复副本（至少留 1 件）。",
+        ]
+        choices: list[Choice] = []
+        if not filtered:
+            lines.append("当前暂无进行中的挂单。")
+        for row in filtered[page.rows]:
+            scope_tag = "🤝1对1" if row["scope"] == "direct" else "📢公开"
+            if row["mode"] == "both":
+                terms = f"💰 {row['price_gold']:,} 金 或 🔄 换 {row['want_item_name']}"
+            elif row["mode"] == "gold":
+                terms = f"💰 {row['price_gold']:,} 金"
+            else:
+                terms = f"🔄 换 {row['want_item_name']}"
+            who = "【我】" if row["is_mine"] else ("【发给我】" if row["is_for_me"] else row["seller_name"])
+            lines.append(
+                f"#{row['listing_id']} {scope_tag} [{row['rarity_label']}{row['category_label']}] "
+                f"{row['item_name']} ×{row['quantity']} ｜ {terms} ｜ 卖家：{who}"
+            )
+            if row["is_mine"]:
+                choices.append(Choice(f"撤单 #{row['listing_id']}", "exchange_cancel", str(row["listing_id"])))
+            elif row["mode"] in ("gold", "both"):
+                choices.append(Choice(f"金币买 #{row['listing_id']}({row['price_gold']:,}金)", "exchange_buy", str(row["listing_id"])))
+            elif row["is_for_me"]:
+                choices.append(Choice(f"拒绝 #{row['listing_id']}", "exchange_reject", str(row["listing_id"])))
+        lines.append("快捷指令：挂单 #仓库编号 金币 价格 ｜ 挂单 装备 #编号 金币 价格 ｜ 挂单 闪耀 B01-1 换 B08-4 ｜ 挂单 给 QQ号 熔阳刻痕 金币 1500000 ｜ 交易 挂单号 [交换物]")
+        choices.extend(page.navigation("exchange"))
+        choices.extend((Choice("我的挂单", "exchange", "我的"), Choice("1对1交易", "exchange", "私密"), Choice("返回大厅", "menu")))
+        return self.reply("\n".join(lines), tuple(choices), plain=True, as_image=True, forward_title="无尽电梯交易所", count_cooldown=False)
+
+    def _parse_exchange_list_text(self, text: str) -> dict:
+        if text.startswith("json:"):
+            return json.loads(text[5:])
+        tokens = text.strip().split()
+        if not tokens:
+            raise GameError(
+                "用法示例：\n"
+                "• 公开金币：挂单 #仓库编号 金币 50000（或 挂单 装备 #编号 金币 350000 / 挂单 闪耀 B01-1 金币 200000）\n"
+                "• 公开换物：挂单 #仓库编号 换 [指定同品质同类物品名]\n"
+                "• 1对1交易：挂单 给 对方QQ 物品名 金币 1500000（或 换 目标物品名）\n"
+                f"最低底价：虹彩 {exchange.RAINBOW_MIN_GOLD:,} 金｜闪耀 {exchange.SHINING_MIN_GOLD:,} 金｜红装 350,000 金｜金装 80,000 金｜传世红藏品 ≥120,000 金"
+            )
+        scope, target_uid = "public", ""
+        idx = 0
+        if tokens[0] in ("给", "私密", "定向", "1对1") and len(tokens) >= 3:
+            scope = "direct"
+            target_uid = tokens[1].lstrip("@")
+            idx = 2
+        if idx >= len(tokens):
+            raise GameError("请指定要上架的物品和交易条件。")
+        asset_type = "inventory"
+        stock_id = equip_id = None
+        piece = ""
+        quantity = 1
+        if tokens[idx] in ("装备", "equip"):
+            if idx + 1 >= len(tokens):
+                raise GameError("请提供装备编号，如：挂单 装备 #12 金币 80000")
+            asset_type = "equipment"
+            equip_id = self._resolve_exchange_equip(tokens[idx + 1])["equip_id"]
+            idx += 2
+        elif tokens[idx] in ("闪耀", "祝福", "shining"):
+            if idx + 1 >= len(tokens):
+                raise GameError("请提供闪耀祝福名称或编号，如：挂单 闪耀 B01-1 金币 200000")
+            asset_type = "shining"
+            piece = tokens[idx + 1]
+            idx += 2
+        else:
+            row = self._resolve_exchange_stock(tokens[idx])
+            stock_id = row["stock_id"]
+            idx += 1
+            if idx < len(tokens) and tokens[idx].isdigit() and tokens[idx] not in ("金币", "换"):
+                quantity = int(tokens[idx])
+                idx += 1
+        if idx >= len(tokens):
+            raise GameError("请指定交易方式：「金币 价格」或「换 [目标物品]」。")
+        mode_word = tokens[idx]
+        idx += 1
+        if mode_word in ("金币", "卖", "金", "gold"):
+            if idx >= len(tokens) or not tokens[idx].isdigit():
+                raise GameError("请填写整数金币价格。")
+            price_val = int(tokens[idx])
+            idx += 1
+            if idx < len(tokens) and tokens[idx] in ("换", "或换", "以物换物", "换物", "barter"):
+                want_item = " ".join(tokens[idx + 1:]).strip()
+                if want_item in ("任意", "随便", "同品质"):
+                    want_item = ""
+                return {
+                    "scope": scope, "target_user_id": target_uid, "mode": "both",
+                    "asset_type": asset_type, "stock_id": stock_id, "equip_id": equip_id, "piece": piece,
+                    "quantity": quantity, "price_gold": price_val, "want_item_id": want_item,
+                }
+            return {
+                "scope": scope, "target_user_id": target_uid, "mode": "gold",
+                "asset_type": asset_type, "stock_id": stock_id, "equip_id": equip_id, "piece": piece,
+                "quantity": quantity, "price_gold": price_val, "want_item_id": "",
+            }
+        if mode_word in ("换", "以物换物", "换物", "barter"):
+            rest = tokens[idx:]
+            gold_kw_idx = next((i for i, tk in enumerate(rest) if tk in ("金币", "或金", "或卖", "gold")), None)
+            if gold_kw_idx is not None:
+                if gold_kw_idx + 1 >= len(rest) or not rest[gold_kw_idx + 1].isdigit():
+                    raise GameError("请填写整数金币价格。")
+                want_item = " ".join(rest[:gold_kw_idx]).strip()
+                if want_item in ("任意", "随便", "同品质"):
+                    want_item = ""
+                return {
+                    "scope": scope, "target_user_id": target_uid, "mode": "both",
+                    "asset_type": asset_type, "stock_id": stock_id, "equip_id": equip_id, "piece": piece,
+                    "quantity": quantity, "price_gold": int(rest[gold_kw_idx + 1]), "want_item_id": want_item,
+                }
+            want_item = " ".join(rest).strip()
+            if want_item in ("任意", "随便", "同品质"):
+                want_item = ""
+            return {
+                "scope": scope, "target_user_id": target_uid, "mode": "barter",
+                "asset_type": asset_type, "stock_id": stock_id, "equip_id": equip_id, "piece": piece,
+                "quantity": quantity, "price_gold": 0, "want_item_id": want_item,
+            }
+        raise GameError("交易方式请写「金币 <价格>」「换 [目标物品]」或「金币 <价格> 或换 [目标物品]」。")
+
+    def exchange_list(self, text: str, target: str) -> Reply:
+        self._check_idle()
+        params = self._parse_exchange_list_text(text)
+        if target and params.get("scope") == "public" and not params.get("target_user_id"):
+            params["scope"] = "direct"
+            params["target_user_id"] = target
+        try:
+            created = exchange.create_listing(
+                self.db, self.catalog,
+                seller_id=self.uid, seller_name=self.player["nickname"],
+                loadout=json.loads(self.player["loadout"]), slots=self.heirloom_slots,
+                scope=params["scope"], target_user_id=params.get("target_user_id", ""),
+                mode=params["mode"], asset_type=params["asset_type"],
+                stock_id=params.get("stock_id"), equip_id=params.get("equip_id"),
+                piece=params.get("piece", ""), quantity=int(params.get("quantity", 1)),
+                price_gold=int(params.get("price_gold", 0)), want_item_id=params.get("want_item_id", ""),
+                now=self.at, month=self.month,
+            )
+        except exchange.ExchangeError as exc:
+            raise GameError(str(exc)) from exc
+        self.heirloom_focus, self.heirloom_slots, self.heirloom_owned = heirlooms.load(self.db, self.uid)
+        scope_label = f"1 对 1 定向给 {created['target_user_id']}" if created["scope"] == "direct" else "公开售卖"
+        if created["mode"] == "both":
+            terms = f"{created['price_gold']:,} 金 或 换 {created['want_item_name']}"
+        elif created["mode"] == "gold":
+            terms = f"{created['price_gold']:,} 金"
+        else:
+            terms = f"同品质同分类换 {created['want_item_name']}"
+        return self.reply(
+            f"⚖️ 上架成功！挂单 #{created['listing_id']}（{scope_label}）\n"
+            f"物品：{created['item_name']} ×{created['quantity']} ｜ 条件：{terms}\n"
+            f"物品已由交易所托管，成交前可发「撤单 {created['listing_id']}」取回。",
+            (Choice("查看交易所", "exchange"), Choice(f"撤单 #{created['listing_id']}", "exchange_cancel", str(created["listing_id"]))),
+            plain=True,
+        )
+
+    def exchange_buy(self, text: str, _target: str) -> Reply:
+        self._check_idle()
+        if text.startswith("json:"):
+            params = json.loads(text[5:])
+            listing_id = int(params["listing_id"])
+            offer_stock_id = params.get("offer_stock_id")
+            offer_equip_id = params.get("offer_equip_id")
+            offer_piece = params.get("offer_piece", "")
+            pay_mode = params.get("pay_mode", "")
+        else:
+            pay_mode = ""
+            tokens = text.strip().split()
+            if not tokens:
+                raise GameError("请指定挂单号，例如「交易 12」或「交易 12 装备 #5」/「交易 12 闪耀 B08-4」。")
+            raw_id = tokens[0].lstrip("#")
+            if not raw_id.isdigit():
+                raise GameError("挂单号应为数字，例如「交易 12」。")
+            listing_id = int(raw_id)
+            offer_stock_id = offer_equip_id = None
+            offer_piece = ""
+            if len(tokens) >= 2:
+                if tokens[1] in ("装备", "equip"):
+                    if len(tokens) < 3:
+                        raise GameError("请提供用于交换的装备编号，如「交易 12 装备 #5」。")
+                    offer_equip_id = self._resolve_exchange_equip(tokens[2])["equip_id"]
+                elif tokens[1] in ("闪耀", "祝福", "shining"):
+                    if len(tokens) < 3:
+                        raise GameError("请提供用于交换的闪耀祝福，如「交易 12 闪耀 B08-4」。")
+                    offer_piece = tokens[2]
+                else:
+                    offer_stock_id = self._resolve_exchange_stock(tokens[1])["stock_id"]
+        try:
+            row, spent = exchange.fulfill_listing(
+                self.db, self.catalog,
+                listing_id=listing_id, buyer_id=self.uid, buyer_name=self.player["nickname"],
+                buyer_gold=self.player["gold"],
+                buyer_loadout=json.loads(self.player["loadout"]), buyer_slots=self.heirloom_slots,
+                offer_stock_id=offer_stock_id, offer_equip_id=offer_equip_id, offer_piece=offer_piece,
+                pay_mode=pay_mode, now=self.at, month=self.month,
+            )
+        except exchange.ExchangeError as exc:
+            raise GameError(str(exc)) from exc
+        if spent:
+            self.player["gold"] -= spent
+        self.heirloom_focus, self.heirloom_slots, self.heirloom_owned = heirlooms.load(self.db, self.uid)
+        self.archives = {
+            r["item_id"]: r["count"] for r in self.db.execute("SELECT item_id,count FROM collections WHERE user_id=?", (self.uid,))
+        }
+        pay_line = f"支付 {spent:,} 金" if spent else "完成同品质同分类以物换物"
+        return self.reply(
+            f"🤝 交易成交！挂单 #{listing_id}：{pay_line}，获得【{row['item_name']}】×{row['quantity']}（已入库）！",
+            (Choice("返回交易所", "exchange"), Choice("查看仓库", "warehouse"), Choice("查看装备", "equipment")),
+            plain=True,
+        )
+
+    def exchange_cancel(self, text: str, _target: str) -> Reply:
+        self._check_idle()
+        raw_id = text.strip().lstrip("#")
+        if not raw_id.isdigit():
+            raise GameError("请指定要撤销的挂单号，例如「撤单 12」。")
+        try:
+            row = exchange.cancel_listing(
+                self.db, self.catalog, listing_id=int(raw_id), seller_id=self.uid, now=self.at, month=self.month,
+            )
+        except exchange.ExchangeError as exc:
+            raise GameError(str(exc)) from exc
+        self.heirloom_focus, self.heirloom_slots, self.heirloom_owned = heirlooms.load(self.db, self.uid)
+        return self.reply(
+            f"↩️ 已撤销挂单 #{row['listing_id']}，【{row['item_name']}】×{row['quantity']} 已退回你的仓库。",
+            (Choice("查看交易所", "exchange"), Choice("返回大厅", "menu")),
+            plain=True,
+        )
+
+    def exchange_reject(self, text: str, _target: str) -> Reply:
+        self._check_idle()
+        raw_id = text.strip().lstrip("#")
+        if not raw_id.isdigit():
+            raise GameError("请指定要拒绝的 1 对 1 交易挂单号，例如「拒单 12」。")
+        try:
+            row = exchange.reject_listing(
+                self.db, self.catalog, listing_id=int(raw_id), user_id=self.uid,
+                user_name=self.player["nickname"], now=self.at, month=self.month,
+            )
+        except exchange.ExchangeError as exc:
+            raise GameError(str(exc)) from exc
+        return self.reply(
+            f"🚫 已拒绝来自 {row['seller_name']} 的 1 对 1 交易 #{row['listing_id']}（{row['item_name']}），物品已退回对方仓库。",
+            (Choice("查看交易所", "exchange"), Choice("返回大厅", "menu")),
+            plain=True,
+        )

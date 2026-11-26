@@ -134,6 +134,52 @@ CREATE TABLE IF NOT EXISTS daily_quests (
     day TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES players(user_id),
     payload TEXT NOT NULL, PRIMARY KEY(day, user_id)
 );
+CREATE TABLE IF NOT EXISTS exchange_listings (
+    listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id TEXT NOT NULL REFERENCES players(user_id),
+    seller_name TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('public','direct')),
+    target_user_id TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL CHECK(mode IN ('gold','barter','both')),
+    asset_type TEXT NOT NULL CHECK(asset_type IN ('inventory','equipment','shining')),
+    category TEXT NOT NULL,
+    rarity TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    item_name TEXT NOT NULL,
+    quantity INTEGER NOT NULL CHECK(quantity > 0),
+    unit_value INTEGER NOT NULL DEFAULT 0,
+    payload TEXT NOT NULL,
+    price_gold INTEGER NOT NULL DEFAULT 0,
+    want_item_id TEXT NOT NULL DEFAULT '',
+    want_item_name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','completed','cancelled','rejected','expired')),
+    buyer_id TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    resolved_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS exchange_open ON exchange_listings(status, scope, expires_at);
+CREATE INDEX IF NOT EXISTS exchange_seller ON exchange_listings(seller_id, status);
+CREATE INDEX IF NOT EXISTS exchange_target ON exchange_listings(target_user_id, status);
+CREATE TABLE IF NOT EXISTS prophecy_scores (
+    week TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES players(user_id),
+    nickname TEXT NOT NULL,
+    max_floor INTEGER NOT NULL DEFAULT 1,
+    cleared_floor INTEGER NOT NULL DEFAULT 0,
+    best_value INTEGER NOT NULL DEFAULT 0,
+    extracted INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(week, user_id)
+);
+CREATE INDEX IF NOT EXISTS prophecy_rank
+ON prophecy_scores(week, cleared_floor DESC, max_floor DESC, extracted DESC, best_value DESC, updated_at ASC);
+CREATE TABLE IF NOT EXISTS prophecy_settled (
+    week TEXT PRIMARY KEY,
+    settled_at INTEGER NOT NULL,
+    summary TEXT NOT NULL
+);
 """
 
 
@@ -167,6 +213,7 @@ class Store:
                 self._migrate_players(db)
                 self._migrate_equipment(db)
                 self._migrate_rush_preferences(db)
+                self._migrate_exchange_listings(db)
                 if self.catalog is not None:
                     self._migrate_rainbow_stock(db)
                 self._ready = True
@@ -204,6 +251,54 @@ class Store:
                 stats = self.catalog.migrated_stats(row["base_id"],row["rarity"],json.loads(row["stats"]))
                 db.execute("UPDATE equipment SET stats=?,rules_version=2 WHERE equip_id=?",
                            (encode(stats),row["equip_id"]))
+
+    @staticmethod
+    def _migrate_exchange_listings(db: sqlite3.Connection) -> None:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='exchange_listings'"
+            ).fetchone()
+            if row is None or "'both'" in (row["sql"] or ""):
+                return
+            db.execute("""CREATE TABLE exchange_listings_v2 (
+                listing_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id TEXT NOT NULL REFERENCES players(user_id),
+                seller_name TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK(scope IN ('public','direct')),
+                target_user_id TEXT NOT NULL DEFAULT '',
+                mode TEXT NOT NULL CHECK(mode IN ('gold','barter','both')),
+                asset_type TEXT NOT NULL CHECK(asset_type IN ('inventory','equipment','shining')),
+                category TEXT NOT NULL,
+                rarity TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                quantity INTEGER NOT NULL CHECK(quantity > 0),
+                unit_value INTEGER NOT NULL DEFAULT 0,
+                payload TEXT NOT NULL,
+                price_gold INTEGER NOT NULL DEFAULT 0,
+                want_item_id TEXT NOT NULL DEFAULT '',
+                want_item_name TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','completed','cancelled','rejected','expired')),
+                buyer_id TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                resolved_at INTEGER NOT NULL DEFAULT 0
+            )""")
+            db.execute("""INSERT INTO exchange_listings_v2(
+                listing_id,seller_id,seller_name,scope,target_user_id,mode,asset_type,category,rarity,
+                item_id,item_name,quantity,unit_value,payload,price_gold,want_item_id,want_item_name,
+                status,buyer_id,created_at,expires_at,resolved_at
+            ) SELECT
+                listing_id,seller_id,seller_name,scope,target_user_id,mode,asset_type,category,rarity,
+                item_id,item_name,quantity,unit_value,payload,price_gold,want_item_id,want_item_name,
+                status,buyer_id,created_at,expires_at,resolved_at
+            FROM exchange_listings""")
+            db.execute("DROP TABLE exchange_listings")
+            db.execute("ALTER TABLE exchange_listings_v2 RENAME TO exchange_listings")
+            db.execute("CREATE INDEX IF NOT EXISTS exchange_open ON exchange_listings(status, scope, expires_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS exchange_seller ON exchange_listings(seller_id, status)")
+            db.execute("CREATE INDEX IF NOT EXISTS exchange_target ON exchange_listings(target_user_id, status)")
 
     @staticmethod
     def _migrate_rush_preferences(db: sqlite3.Connection) -> None:

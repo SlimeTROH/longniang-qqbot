@@ -6,7 +6,7 @@ from collections import Counter
 from pathlib import Path
 from random import Random
 
-from . import expedition, heirlooms
+from . import expedition, heirlooms, prophecy
 
 RARITIES = ("white", "green", "blue", "purple", "gold", "red")
 SLOTS = ("武器", "护甲", "挂件", "核心")
@@ -27,6 +27,7 @@ class Catalog:
         self.affixes = data["affixes"]
         self.sets = data["sets"]
         self.events = {event["id"]: event for event in data["events"]}
+        self.prophecy_events = prophecy.trial_events(self.events)
         self.recipes = data["recipes"]
         self.shop = data["shop"]
         self.safebox_prices = data["safebox_prices"]
@@ -179,7 +180,7 @@ class Catalog:
                 result.append(self.ordinary_item(rng.choice(pool), rng, multiplier=collection_scale*bonus*condition))
             else:
                 result.append(self.roll_gear(rng, rng.choice(("blue","purple")), map_scale*bonus))
-        if not run.get("sim") and rng.random() < expedition.boss_red_gear_rate(number, map_info["multiplier"]):
+        if not run.get("sim") and not run.get("prophecy") and rng.random() < expedition.boss_red_gear_rate(number, map_info["multiplier"]):
             result.append(self.roll_gear(rng, "red", map_scale*bonus))
         return result
 
@@ -217,6 +218,7 @@ class Catalog:
             supplies = [
                 key for key, definition in self.items.items()
                 if definition["kind"] == "supply" and definition["rarity"] == rarity and key != "doll"
+                and (not run.get("prophecy") or key not in prophecy.EXIT_ITEMS)
             ]
             if supplies:
                 return self.ordinary_item(rng.choice(supplies), rng, multiplier=multiplier)

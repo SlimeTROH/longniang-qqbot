@@ -181,3 +181,71 @@
 .heirloom-piece p {color:#283544}
 .secondary-stats .stat-source-button {min-height:2.8rem;display:flex;flex-direction:column;align-items:flex-start}
 .secondary-stats .stat-source-button[aria-expanded="true"] {outline:1px solid currentColor}
+
+
+/* ===== Player Exchange Panel ===== */
+.exchange-panel { display: grid; gap: 1rem; }
+.exchange-create summary { cursor: pointer; font-weight: 700; padding: 0.35rem 0; }
+.exchange-form { display: grid; gap: 0.6rem; margin-top: 0.7rem; }
+.exchange-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.exchange-row select, .exchange-row input { flex: 1 1 180px; min-width: 0; }
+.exchange-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; margin-top: 0.6rem; }
+.exchange-card { display: grid; gap: 0.45rem; padding: 0.85rem; border-left: 3px solid rgba(148, 163, 184, 0.5); }
+.exchange-card[data-grade="gold"] { border-left-color: #eab308; }
+.exchange-card[data-grade="red"] { border-left-color: #ef4444; }
+.exchange-card[data-grade="shining"] { border-left-color: #38bdf8; }
+.exchange-card[data-grade="rainbow"] { border-left-color: #c084fc; }
+.exchange-card-head { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+.exchange-card-head small { margin-left: auto; opacity: 0.7; }
+.exchange-item-title { font-size: 1rem; }
+.exchange-terms { margin: 0; font-weight: 600; color: #fde68a; }
+.exchange-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; flex-wrap: wrap; }
+.exchange-card-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.exchange-terms-list { display: grid; gap: 0.2rem; }
+.exchange-field-label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
+.exchange-selected-box { display: grid; }
+.exchange-selected-empty {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap;
+  padding: 0.65rem 0.78rem; border-radius: 0.45rem; border: 1px dashed var(--border); background: var(--surface-2);
+  font-size: 0.86rem; color: var(--muted);
+}
+.exchange-selected-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.65rem; flex-wrap: wrap;
+  padding: 0.65rem 0.78rem; border-radius: 0.45rem; border: 1px solid var(--border);
+  border-left: 3px solid var(--amber); background: var(--surface-2);
+}
+.exchange-selected-card[data-grade="gold"] { border-left-color: #eab308; }
+.exchange-selected-card[data-grade="red"] { border-left-color: #ef4444; }
+.exchange-selected-card[data-grade="shining"] { border-left-color: #38bdf8; }
+.exchange-selected-card[data-grade="rainbow"] { border-left-color: #c084fc; }
+.exchange-selected-info { display: grid; gap: 0.2rem; min-width: 0; flex: 1 1 200px; }
+.exchange-selected-head { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+.exchange-qty-wrap { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.exchange-qty-wrap .exchange-field-label { margin-bottom: 0; }
+.exchange-mode-group { display: grid; gap: 0.35rem; }
+.exchange-mode-chips { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.exchange-mode-chip {
+  display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.45rem 0.8rem; min-height: 2.4rem;
+  border-radius: 0.45rem; border: 1px solid var(--border); background: var(--surface-2);
+  cursor: pointer; user-select: none; font-size: 0.88rem; transition: border-color .15s, background .15s;
+}
+.exchange-mode-chip.is-active { border-color: var(--amber); background: rgba(234, 179, 8, 0.14); color: #fef3c7; font-weight: 600; }
+.exchange-mode-chip input { margin: 0; accent-color: var(--amber); width: 1rem; height: 1rem; }
+.exchange-subpanel { display: grid; gap: 0.35rem; padding: 0.55rem 0.7rem; border-radius: 0.45rem; background: var(--surface-2); border: 1px solid var(--border); }
+.exchange-want-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+.exchange-want-text { font-size: 0.88rem; font-weight: 600; color: var(--ink); }
+.exchange-want-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.exchange-list-search { width: 100%; min-height: 2.5rem; padding: 0.4rem 0.65rem; }
+.exchange-picker-body { display: grid; gap: 0.65rem; }
+.exchange-picker-toolbar { display: grid; gap: 0.4rem; }
+.exchange-picker-controls { display: grid; gap: 0.4rem; grid-template-columns: minmax(0, 1fr) auto; }
+.exchange-picker-search { width: 100%; min-width: 0; min-height: 2.5rem; padding: 0.4rem 0.65rem; }
+.exchange-picker-grade { min-height: 2.5rem; padding: 0.35rem 0.5rem; }
+.exchange-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(13.5rem, 100%), 1fr)); gap: 0.45rem; max-height: 56dvh; overflow-y: auto; padding-right: 0.15rem; }
+.exchange-pick-card { min-height: 4.4rem; }
+.exchange-pick-card.is-selected { outline: 2px solid var(--amber); outline-offset: -1px; filter: brightness(1.12); }
+.exchange-pick-sub { font-size: 0.75rem; color: var(--inv-light); opacity: 0.9; line-height: 1.3; overflow-wrap: anywhere; }
+.exchange-pick-any { grid-column: 1 / -1; min-height: 3.4rem; }
+.inv-card[data-grade="shining"], .inv-detail-header[data-grade="shining"] {
+  --inv-fill: linear-gradient(120deg, #274a66, #3d5f5b); --inv-edge: #7dd3fc; --inv-light: #e0f2fe;
+}

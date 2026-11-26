@@ -73,6 +73,18 @@ _ACTIONS = {
     "首领攻略": "help", "boss攻略": "help", "首领房": "help",
     "局内道具":"field", "临装":"field", "使用临装":"field_use", "地图道具":"field_guide", "临装图鉴":"field_guide",
     "图鉴进度":"atlas", "背包技能":"atlas", "虹彩图鉴":"atlas", "电梯图鉴":"atlas",
+    "交易所": "exchange", "交易行": "exchange", "我的挂单": "exchange",
+    "挂单": "exchange_list", "上架": "exchange_list", "发起交易": "exchange_list",
+    "交易": "exchange_buy", "买单": "exchange_buy", "成交": "exchange_buy", "接受交易": "exchange_buy",
+    "撤单": "exchange_cancel", "下架": "exchange_cancel",
+    "拒单": "exchange_reject", "拒绝交易": "exchange_reject",
+    "嵌入星器": "prophecy_pick", "群星寓言集": "prophecy",
+    "寓言集": "prophecy", "群星寓言": "prophecy", "来自群星的寓言集": "prophecy", "星兆": "prophecy",
+    "预言集": "prophecy", "群星预言": "prophecy", "来自群星的预言集": "prophecy",
+    "进入寓言集": "prophecy_start", "挑战寓言集": "prophecy_start", "开启寓言集": "prophecy_start", "踏入星兆": "prophecy_start",
+    "进入预言集": "prophecy_start", "挑战预言集": "prophecy_start", "开启预言集": "prophecy_start",
+    "寓言榜": "prophecy_rank", "星兆榜": "prophecy_rank", "上周寓言榜": "prophecy_rank",
+    "预言榜": "prophecy_rank", "上周预言榜": "prophecy_rank",
 }
 _REQUIRES_RUN = frozenset({
     "继续", "走", "冲", "进", "贪", "连战", "连进", "自动深入", "连推", "速推", "自动探索",
@@ -110,6 +122,7 @@ _DEFAULT_ARGUMENTS = {
     "物品介绍": "道具", "道具介绍": "道具", "物品大全": "道具", "词条介绍": "词条", "装备介绍": "装备",
     "概率规则": "概率", "爆率介绍": "概率", "电梯概率": "概率", "电梯爆率": "概率",
     "首领攻略":"首领", "boss攻略":"首领", "首领房":"首领",
+    "我的挂单": "我的", "上周寓言榜": "上周", "上周预言榜": "上周",
 }
 
 
@@ -130,11 +143,17 @@ _REPEATABLE_MENU_ACTIONS = frozenset({
     "equipment", "wear", "autoequip", "reroll", "help", "lookup",
     "gallery", "rank", "all_rank", "quests", "start", "simulate", "menu", "rename", "battle_log",
     "confirm_order", "cancel_order", "orders", "sell",
+    "exchange", "exchange_list", "exchange_buy", "exchange_cancel", "exchange_reject",
+    "prophecy", "prophecy_start", "prophecy_rank",
 })
 _locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 _sweeper: asyncio.Task | None = None
 _prewarmer: asyncio.Task | None = None
-_MUTATING_COMMANDS = frozenset({"buy", "sell", "craft", "decode", "extract", "fight", "rob", "rescue", "support", "wear", "autoequip", "reroll", "confirm_order"})
+_MUTATING_COMMANDS = frozenset({
+    "buy", "sell", "craft", "decode", "extract", "fight", "rob", "rescue", "support",
+    "wear", "autoequip", "reroll", "confirm_order",
+    "exchange_list", "exchange_buy", "exchange_cancel", "exchange_reject", "prophecy_start", "prophecy_pick",
+})
 
 
 @dataclass(frozen=True)
@@ -393,7 +412,7 @@ async def _route(event: MessageEvent) -> Route | None:
         elif word in ("抽绿箱", "新手箱", "抽蓝箱", "进阶箱", "抽金箱", "金装匣", "尊享箱", "卖装备", "卖蓝装", "卖紫装", "卖金装", "卖红装", "卖闲置红装", "卖蓝绿装", "卖绿蓝装", "卖低级装备", "卖闲置装备", "卖全部闲置装备", "清装备", "一键卖装备"):
             argument = f"{_DEFAULT_ARGUMENTS[word]} {argument}"
     target = ""
-    if command == "support":
+    if command in ("support", "exchange_list"):
         target = next((
             str(segment.data.get("qq", "")) for segment in event.get_message()
             if segment.type == "at" and str(segment.data.get("qq", "")) != str(event.self_id)

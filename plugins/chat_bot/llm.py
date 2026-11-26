@@ -1500,7 +1500,7 @@ async def _call_aux_llm(
 
 async def _call_deepseek(
     system_prompt: str, user_content: str | list[dict[str, Any]], api_key: str, model: str,
-    *, timeout: float, max_output_tokens: int, json_mode: bool = True,
+    *, timeout: float, max_output_tokens: int, json_mode: bool = True, fast: bool = False,
 ) -> tuple[str, dict[str, Any], str]:
     ds_payload: dict[str, Any] = {
         "model": model or DEEPSEEK_MODEL,
@@ -1513,6 +1513,8 @@ async def _call_deepseek(
     }
     if json_mode:
         ds_payload["response_format"] = {"type": "json_object"}
+    if fast:
+        ds_payload["thinking"] = {"type": "disabled"}
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

@@ -753,6 +753,13 @@ def _search_knowledge(data: dict, query: str) -> str:
     if not q:
         return ""
     hits = _matched_gear_parts(data, q)
+    if any(word in q for word in ("寓言集", "预言集", "星兆", "星匣", "星器", "裂星棱镜", "轨道星锚", "余晖心匣")):
+        from importlib import import_module
+        package = type(_get_live_elevator_game()).__module__.rsplit(".", 1)[0]
+        trial = import_module(package + ".prophecy")
+        hits.append(f"【{trial.TITLE}】北京时间每周统一构筑、单人、免费、零带出。{trial.STAR_RULE}"
+                    "网页在本层星匣点选，QQ 可选菜单或发「嵌入星器 层数 星器名」。"
+                    f"本模式禁用直接撤离的烟雾弹。只有击败 F{trial.MAX_FLOOR} 终主才计登顶。")
     if any(w in q for w in ("祝福","闪耀","追寻","闻岑", "测试破限","破甲")) or re.search(r"\bb0[1-8]",q):
         rules = _heirloom_rules()
         hits.append("【闻岑的闪耀祝福】四个独立卡槽，单件少量属性。两件套在二级属性常规结算后破限，四件触发专属机制。"

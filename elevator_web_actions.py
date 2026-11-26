@@ -1,6 +1,7 @@
 """Validate structured browser inputs and adapt them to the shared elevator engine."""
 from __future__ import annotations
 
+import json
 import re
 
 
@@ -10,6 +11,8 @@ _EMPTY_COMMANDS = frozenset({
 _PARAMETERS = {
     **dict.fromkeys(_EMPTY_COMMANDS, ()),
     "start": ("map_id", "supplies", "nickname","focus"),
+    "prophecy_start": ("nickname",),
+    "prophecy_pick": ("floor", "id"),
     "pursue": ("focus",),
     "equip_blessing": ("slot","piece"),
     "wish_confirm": ("token",),
@@ -33,6 +36,10 @@ _PARAMETERS = {
     "decode": ("stock_id", "quantity"),
     "decode_all": (),
     "rename": ("nickname",),
+    "exchange_list": ("scope", "target_user_id", "mode", "asset_type", "stock_id", "equip_id", "piece", "quantity", "price_gold", "want_item_id"),
+    "exchange_buy": ("listing_id", "offer_stock_id", "offer_equip_id", "offer_piece", "pay_mode"),
+    "exchange_cancel": ("listing_id",),
+    "exchange_reject": ("listing_id",),
 }
 # A revision must still match the transaction's current state. Web navigation has no
 # QQ chat-flood penalty, whereas summons and commercial actions keep their cooldowns.
@@ -140,6 +147,74 @@ def prepare(turn, name: str, params: dict, error) -> tuple[str, str]:
         return name, ""
     if name in ("start", "simulate"):
         return _prepare_start(turn, name, params, error)
+    if name == "prophecy_pick":
+        return name, f"{_count(params, 'floor', 2000)} {_key(params)}"
+    if name == "prophecy_start":
+        turn._check_idle()
+        if "nickname" in params or not turn.player["name_confirmed"]:
+            nickname = _nickname(params.get("nickname", turn.group_nick[:16]))
+            if not turn.player["name_confirmed"]:
+                turn.player.update(nickname=nickname, name_confirmed=1)
+        return name, ""
+    if name == "exchange_cancel" or name == "exchange_reject":
+        turn._check_idle()
+        return name, str(_count(params, "listing_id", 2**53 - 1))
+    if name == "exchange_list":
+        turn._check_idle()
+        scope = params.get("scope", "public")
+        mode = params.get("mode", "gold")
+        asset_type = params.get("asset_type", "")
+        if scope not in ("public", "direct") or mode not in ("gold", "barter", "both") or asset_type not in ("inventory", "equipment", "shining"):
+            raise ValueError("交易所挂单参数无效。")
+        target_uid = params.get("target_user_id", "")
+        if not isinstance(target_uid, str) or (scope == "direct" and not re.fullmatch(r"[0-9]{1,20}", target_uid.strip())):
+            raise ValueError("1 对 1 交易请填写有效的对方 QQ 号。")
+        payload = {
+            "scope": scope, "target_user_id": target_uid.strip() if scope == "direct" else "",
+            "mode": mode, "asset_type": asset_type,
+        }
+        if asset_type == "inventory":
+            payload["stock_id"] = _count(params, "stock_id", 2**53 - 1)
+            payload["quantity"] = _count(params, "quantity", 9999, 1)
+        elif asset_type == "equipment":
+            payload["equip_id"] = _count(params, "equip_id", 2**53 - 1)
+            payload["quantity"] = 1
+        else:
+            piece = params.get("piece")
+            if not isinstance(piece, str) or not re.fullmatch(r"B0[1-8]-[1-4]", piece):
+                raise ValueError("无效的闪耀祝福编号。")
+            payload["piece"] = piece
+            payload["quantity"] = 1
+        if mode in ("gold", "both"):
+            payload["price_gold"] = _count(params, "price_gold", 100_000_000)
+        else:
+            payload["price_gold"] = 0
+        if mode in ("barter", "both"):
+            want = params.get("want_item_id", "")
+            if not isinstance(want, str) or len(want) > 64:
+                raise ValueError("目标物品编号无效。")
+            payload["want_item_id"] = want.strip()
+        else:
+            payload["want_item_id"] = ""
+        return name, "json:" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if name == "exchange_buy":
+        turn._check_idle()
+        payload = {"listing_id": _count(params, "listing_id", 2**53 - 1)}
+        if params.get("offer_stock_id") is not None:
+            payload["offer_stock_id"] = _count(params, "offer_stock_id", 2**53 - 1)
+        if params.get("offer_equip_id") is not None:
+            payload["offer_equip_id"] = _count(params, "offer_equip_id", 2**53 - 1)
+        if params.get("offer_piece") is not None:
+            piece = params["offer_piece"]
+            if not isinstance(piece, str) or not re.fullmatch(r"B0[1-8]-[1-4]", piece):
+                raise ValueError("无效的闪耀祝福编号。")
+            payload["offer_piece"] = piece
+        if params.get("pay_mode") is not None:
+            pm = params["pay_mode"]
+            if pm not in ("gold", "barter"):
+                raise ValueError("无效的支付方式。")
+            payload["pay_mode"] = pm
+        return name, "json:" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if name=="pursue":
         return name,_focus(params)
     if name=="equip_blessing":

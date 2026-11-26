@@ -28,11 +28,12 @@ rules = _engine()
 expedition = rules.expedition
 ACTIVE_READS = frozenset({"battle_log", "bag", "field_guide", "atlas", "rank", "all_rank",
                          "help", "lookup", "quests", "gallery", "shop", "warehouse",
-                         "black_market", "equipment"})
+                         "black_market", "equipment", "exchange", "prophecy", "prophecy_rank"})
 ACTIONS = ACTIVE_READS | {"pursue","equip_blessing","heirlooms","wish_confirm","wish_cancel",
     "menu", "start", "simulate", "down", "rush", "rush_settings", "fight", "flee", "extract", "save_box",
     "swap_box", "use", "event", "rob", "rescue", "leave", "flare", "support", "buy", "sell",
     "wear", "autoequip", "reroll", "craft", "decode", "blessing", "rename", "field", "field_use", "field_pick",
+    "prophecy_start", "prophecy_pick", "exchange_list", "exchange_buy", "exchange_cancel", "exchange_reject",
 }
 MAP_DESCRIPTIONS = {
     "mall": "停业后的购物中心，适合熟悉探索路线。",
@@ -95,15 +96,18 @@ def _records(turn):
         "SELECT payload,updated_at,group_id FROM active_runs WHERE user_id=?", (uid,)
     ).fetchone()
     gear = turn._equipment_options()
-    return row, turn._stock(), gear, _group_context(turn)
+    ex_listings = rules.exchange.visible_listings(db, turn.catalog, uid, turn.at, turn.month)
+    prophecy_me = rules.prophecy.player_record(db, turn.prophecy_week, uid)
+    return row, turn._stock(), gear, _group_context(turn), ex_listings, prophecy_me
 
 
 def _revision(turn, records, key: bytes) -> str:
-    row, stock, gear, group = records
+    row, stock, gear, group, ex_listings, prophecy_me = records
     # Fingerprint actual persisted payload: legacy runs hydrate field seeds on read.
-    snapshot = [turn.gid, turn.day, turn.player, list(row) if row else None, stock,
+    snapshot = [turn.gid, turn.day, turn.prophecy_week, turn.player, list(row) if row else None, stock,
                 [entry.item for entry in gear], turn.archives, group, turn.rush_floors, turn.rush_skip_valuable,
-                turn.rush_event_mode, turn.rush_auto_elite,turn.heirloom_focus,turn.heirloom_slots,turn.heirloom_owned]
+                turn.rush_event_mode, turn.rush_auto_elite,turn.heirloom_focus,turn.heirloom_slots,turn.heirloom_owned,
+                [(r["listing_id"], r["price_gold"], r["want_item_id"]) for r in ex_listings], prophecy_me]
     data = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hmac.digest(key, data.encode("utf-8"), "sha256").hex()
 
@@ -272,7 +276,7 @@ def _run(turn, last_action, own_signal) -> dict:
                                    "red_gear_rate":expedition.boss_red_gear_rate(rank,cat.maps[run["map"]]["multiplier"]),
                                    "shining_rate":rules.heirlooms.probability(run["floor"])}
     elif kind == "choice":
-        spec = cat.events[pending["id"]]
+        spec = turn.encounter_events()[pending["id"]]
         event.update(name=spec["name"], text=spec["text"], choices=[
             action(option["label"], "event", str(i), params={"option": i},
                    description=turn._describe_event_option(option, pending))
@@ -349,9 +353,17 @@ def _run(turn, last_action, own_signal) -> dict:
             "field": [{"id": key, "name": cat.field_items[key]["name"], "rarity": "field", "quantity": quantity}
                       for key, quantity in recorded["field"].items()],
             "battle": _settlement(cat, recorded.get("battle")),
+            "star": recorded.get("star", ""),
         }
     return {
-        "map": run["map"], "map_name": cat.maps[run["map"]]["name"], "floor": run["floor"],
+        "map": run["map"],
+        "map_name": rules.prophecy.TITLE if run.get("prophecy") else cat.maps[run["map"]]["name"],
+        "floor": run["floor"],
+        "max_floor": rules.prophecy.MAX_FLOOR if run.get("prophecy") else None,
+        "prophecy": bool(run.get("prophecy")),
+        "prophecy_week": run.get("prophecy_week", ""),
+        "prophecy_name": run.get("prophecy_name", ""),
+        "star_relics": rules.prophecy.star_rows(run) if run.get("prophecy") else [],
         "hp": run["hp"], "max_hp": run["stats"]["hp"], "shield": run.get("shield", 0), "stats": run["stats"],
         "effective_stats": {**run["stats"], "atk": round(rules.combat.attack_power(run), 2),
                             "def": round(rules.combat.defence(run), 2), "agi": rules.combat.agility(run)},
@@ -365,7 +377,8 @@ def _run(turn, last_action, own_signal) -> dict:
         "field_worn": next((item for item in slots if item), None), "field_buffs": buffs, "field_charges": charges,
         "expires_at": last_action + rules.RUN_TIMEOUT, "value": turn._value(run["bag"] + run["safe"]),
         "signal": own_signal, "next_floor": turn._next_floor_summary(),
-        "next_boss": expedition.next_boss(run["floor"]),
+        "next_boss": min(rules.prophecy.MAX_FLOOR, expedition.next_boss(run["floor"]))
+                     if run.get("prophecy") else expedition.next_boss(run["floor"]),
     }
 
 
@@ -403,20 +416,164 @@ def _expedition_controls(turn, run) -> list[dict]:
         if not (boss or ambush):
             odds = rules.combat.flee_rate(turn.run)
             controls.append(_control(f"脱战 · {odds:.0%}", "flee"))
-        if (enemy.get("elite") or ambush) and not turn.run.get("sos_used") and not run["simulation"]:
+        if (enemy.get("elite") or ambush) and not turn.run.get("sos_used") and not run["simulation"] and not run.get("prophecy"):
             controls.append(_control("呼叫支援", "flare"))
     if not ambush:
         controls.append(escape)
     return controls
 
 
+def _exchange_state(turn, stock, gear, listings) -> dict:
+    cat = turn.catalog
+    equipped_ids = set(json.loads(turn.player["loadout"]).values())
+    rainbow_totals: dict[str, int] = {}
+    for item in stock:
+        if item["id"] in cat.rainbow:
+            rainbow_totals[item["id"]] = rainbow_totals.get(item["id"], 0) + int(item["quantity"])
+    tradable_inv = []
+    for item in stock:
+        key = item["id"]
+        spec = cat.items.get(key)
+        if spec is None or spec.get("temporary_key"):
+            continue
+        category, rarity = rules.exchange.classify_inventory_item(cat, key)
+        max_qty = int(item["quantity"])
+        if category == "rainbow":
+            if rainbow_totals.get(key, 0) <= 1:
+                continue
+            max_qty = 1
+        tradable_inv.append({
+            "stock_id": item["stock_id"], "id": key, "name": cat.name(item, symbol=False),
+            "quality": item.get("quality", ""), "description": spec.get("description", ""),
+            "category": category, "category_label": rules.exchange.CATEGORY_LABELS.get(category, category),
+            "rarity": rarity, "rarity_label": rules.exchange.RARITY_LABELS.get(rarity, rarity),
+            "quantity": max_qty, "unit_value": item["value"],
+            "min_gold": rules.exchange.min_gold_price(category, rarity, item["value"], 1),
+        })
+    tradable_gear = []
+    for row in gear:
+        item = row.item
+        if item["equip_id"] in equipped_ids:
+            continue
+        key, grade = item["base_id"], item["rarity"]
+        tradable_gear.append({
+            "equip_id": item["equip_id"], "id": key, "name": cat.equipment[key]["name"],
+            "slot": cat.equipment[key]["slot"], "category": "equipment", "category_label": "装备",
+            "rarity": grade, "rarity_label": rules.exchange.RARITY_LABELS.get(grade, grade),
+            "stats": json.loads(item["stats"]), "affixes": _affix_details(cat, json.loads(item["affixes"])),
+            "min_gold": rules.exchange.min_gold_price("equipment", grade, 0, 1),
+        })
+    tradable_shining = []
+    for piece, qty in sorted(turn.heirloom_owned.items()):
+        if qty < 1 or piece not in rules.heirlooms.PIECES:
+            continue
+        if piece in turn.heirloom_slots and qty <= 1:
+            continue
+        info = rules.heirlooms.PIECES[piece]
+        tradable_shining.append({
+            "piece": piece, "id": piece,
+            "name": f"{rules.heirlooms.SETS[info['set']]['name']}·{info['name']}",
+            "category": "shining", "category_label": "闪耀祝福",
+            "rarity": "shining", "rarity_label": "闪耀",
+            "quantity": qty - (1 if piece in turn.heirloom_slots else 0),
+            "min_gold": rules.exchange.SHINING_MIN_GOLD,
+        })
+    _rar_rank = {"rainbow": 0, "shining": 1, "red": 2, "gold": 3, "purple": 4, "blue": 5, "green": 6, "white": 7}
+    tradable_inv.sort(key=lambda x: (_rar_rank.get(x["rarity"], 9), -int(x["unit_value"]), x["name"]))
+    tradable_gear.sort(key=lambda x: (_rar_rank.get(x["rarity"], 9), x["slot"], -int(x["equip_id"])))
+    barter_catalog: dict[str, list[dict]] = {}
+    for key, spec in cat.items.items():
+        if spec.get("temporary_key"):
+            continue
+        category, rarity = rules.exchange.classify_inventory_item(cat, key)
+        barter_catalog.setdefault(f"{category}:{rarity}", []).append({
+            "id": key, "name": spec["name"], "rarity": rarity,
+            "rarity_label": rules.exchange.RARITY_LABELS.get(rarity, rarity),
+            "category_label": rules.exchange.CATEGORY_LABELS.get(category, category),
+            "description": spec.get("description", ""),
+        })
+    for key, spec in cat.equipment.items():
+        rarity = "red" if spec.get("gear_set") else "standard"
+        barter_catalog.setdefault(f"equipment:{rarity}", []).append({
+            "id": key, "name": spec["name"], "slot": spec["slot"],
+            "rarity": "red" if rarity == "red" else "purple",
+            "category_label": spec["slot"],
+        })
+    barter_catalog["shining:shining"] = [
+        {
+            "id": k, "name": f"{rules.heirlooms.SETS[v['set']]['name']}·{v['name']}",
+            "rarity": "shining", "rarity_label": "闪耀", "category_label": rules.heirlooms.SETS[v['set']]['name'],
+        }
+        for k, v in sorted(rules.heirlooms.PIECES.items())
+    ]
+    return {
+        "listings": listings,
+        "tradable": {"inventory": tradable_inv, "equipment": tradable_gear, "shining": tradable_shining},
+        "barter_catalog": barter_catalog,
+        "min_floors": {
+            "rainbow": rules.exchange.RAINBOW_MIN_GOLD,
+            "shining": rules.exchange.SHINING_MIN_GOLD,
+            "equipment_red": 350_000,
+            "equipment_gold": 80_000,
+            "collection_red": 120_000,
+            "collection_gold": 25_000,
+        },
+    }
+
+
+def _prophecy_state(turn, my_record) -> dict:
+    week = turn.prophecy_week
+    cfg = rules.prophecy.weekly_config(week, turn.catalog)
+    prev_week = rules.prophecy.previous_week_key(week)
+    prev_rows = rules.prophecy.leaderboard(turn.db, prev_week, limit=10)
+    prev_cfg = rules.prophecy.weekly_config(prev_week, turn.catalog)
+    return {
+        "title": rules.prophecy.TITLE,
+        "star_rule": rules.prophecy.STAR_RULE,
+        "week": week,
+        "name": cfg["name"],
+        "omen": cfg["omen"],
+        "base_map": cfg["base_map"],
+        "base_map_name": cfg["base_map_name"],
+        "max_floor": cfg["max_floor"],
+        "start_at": cfg["start_at"],
+        "end_at": cfg["end_at"],
+        "gear": [
+            {**g, "affixes": _affix_details(turn.catalog, g["affixes"])}
+            for g in cfg["gear"]
+        ],
+        "blessings": cfg["blessings"],
+        "blessing_names": cfg["blessing_names"],
+        "rainbows": cfg["rainbows"],
+        "rainbow_names": cfg["rainbow_names"],
+        "supplies": cfg["supplies"],
+        "stats": cfg["stats"],
+        "unlock": rules.prophecy.unlock_status(turn.catalog, turn.archives),
+        "my_record": my_record,
+        "leaderboard": rules.prophecy.leaderboard(turn.db, week, limit=15),
+        "last_week": {
+            "week": prev_week,
+            "name": prev_cfg["name"],
+            "leaderboard": prev_rows,
+        },
+    }
+
+
 def _snapshot(turn, records, revision: str) -> dict:
-    record, stock, gear, group = records
+    record, stock, gear, group, ex_listings, prophecy_me = records
     signals, own_signal, blessing_until = group
     p = turn.player
     sources = {}
     stats, perks = turn._stats(sources=sources)
     run = _run(turn, record["updated_at"] if record else turn.at, own_signal) if turn.run else None
+    if run and run.get("prophecy"):
+        p_cfg = rules.prophecy.weekly_config(run["prophecy_week"], turn.catalog)
+        sources = {k: list(v) for k, v in p_cfg["stat_sources"].items()}
+        stats = dict(p_cfg["stats"])
+        for relic in run["star_relics"]:
+            if relic["rank"]:
+                expedition.add_stats(stats, {relic["stat"]: relic["bonus"]}, sources,
+                                     f"{relic['name']} · {relic['rank']}阶 · F{run['floor']}")
     sheet = turn.run or {"stats":stats,"hp":stats["hp"],"perks":perks,"floor":1,"tea_until":0}
     if run:
         for key, permanent in sheet["stats"].items():
@@ -458,6 +615,7 @@ def _snapshot(turn, records, revision: str) -> dict:
     return {
         "revision": revision, "player": {
             **{k: p[k] for k in ("nickname", "gold", "tickets", "paid_tickets", "safebox", "runs", "extracts")},
+            "user_id": turn.uid,
             "name_confirmed": bool(p["name_confirmed"]), "ticket_cap": turn.ticket_cap,
             "paid_ticket_cap": expedition.TICKET_PAID_CAP,
             "rush_floors": turn.rush_floors, "rush_skip_valuable": turn.rush_skip_valuable,
@@ -471,10 +629,17 @@ def _snapshot(turn, records, revision: str) -> dict:
         "heirlooms":{"sets":rules.heirlooms.SETS,"pieces":rules.heirlooms.PIECES,
                      "owned":turn.heirloom_owned,"slots":turn.heirloom_slots,
                      "focus":(turn.run or {}).get("heirloom_focus",turn.heirloom_focus),
-                     "needs_focus":bool(turn.run and not turn.run.get("sim") and not turn.run.get("heirloom_focus"))},
-        "run": run, "maps": maps, "actions": moves, "controls": _expedition_controls(turn, run), "warehouse": warehouse,
+                     "needs_focus":bool(turn.run and not turn.run.get("sim") and not turn.run.get("prophecy") and not turn.run.get("heirloom_focus"))},
+        "run": run, "maps": maps, "actions": moves, "controls": [
+            *(_control(f"嵌入{r['name']}（{r['label']} +{r['gain']}）", "prophecy_pick",
+                       {"floor": run["floor"], "id": r["id"]})
+              for r in (run or {}).get("star_relics", ()) if r["offered"]),
+            *_expedition_controls(turn, run),
+        ], "warehouse": warehouse,
         "supplies": [i for i in warehouse if i["kind"] == "supply"],
         "equipment": _equipment(turn, gear), "shop": _shop(turn), "market": _market(turn),
+        "exchange": _exchange_state(turn, stock, gear, ex_listings),
+        "prophecy": _prophecy_state(turn, prophecy_me),
         "atlas": _atlas(turn), "signals": signals, "group_blessing_until": blessing_until,
         "tabs": [{"id": "game", "label": "电梯"}, {"id": "warehouse", "label": "仓库"},
                  {"id": "equipment", "label": "装备"}, {"id": "shop", "label": "商店"},
@@ -526,7 +691,10 @@ class WebGame:
             raise ValueError("缺少游戏状态版本，请先刷新。")
         at = int(time.time() if now is None else now)
         with self.game.store.transaction() as db:
-            rules._settle_months(db, rules._clock(at).strftime("%Y-%m"))
+            month = rules._clock(at).strftime("%Y-%m")
+            rules._settle_months(db, month)
+            rules.exchange.expire_listings(db, self.game.catalog, at, month)
+            rules.prophecy.settle_completed_weeks(db, rules.prophecy.week_key(at), self.game.catalog, at)
             turn = self._turn(db, uid, group, nickname, at)
             records = _records(turn)
             current = _revision(turn, records, self._revision_key)
@@ -574,6 +742,10 @@ _COMMAND_MESSAGES = {
     "rush_settings": "连战设置已保存",
     "support": "支援完成", "blessing": "已开启金雨祈福", "rob": "遗物已拾取",
     "rescue": "遗物已归还", "leave": "已跳过当前遭遇", "event": "奇遇已处理",
+    "prophecy_start": "已踏入来自群星的寓言集",
+    "prophecy_pick": "星器已嵌入",
+    "exchange_list": "交易所挂单已上架", "exchange_buy": "交易所成交完成",
+    "exchange_cancel": "挂单已撤销并退回", "exchange_reject": "已拒绝 1 对 1 交易",
 }
 
 
@@ -590,24 +762,35 @@ def _command_result(command, state, turn, old_floor, old_hp, old_gold) -> dict:
     if rush and battle and run and battle["floor"] != floor:
         battle = None
     if departure:
-        if departure["simulation"] and departure["extracted"]:
+        if departure.get("prophecy"):
+            cleared = departure.get("cleared_floor", floor)
+            if cleared >= rules.prophecy.MAX_FLOOR and departure["extracted"]:
+                outcome, title = "prophecy_clear", "✦ 登顶群星尽头 F2000"
+            elif departure["extracted"]:
+                outcome, title = "prophecy_complete", "✦ 寓言集结算"
+            else:
+                outcome, title = "failed", "✦ 寓言集阵亡"
+            summary = f"{title} · 推进 F{floor}（通过 F{cleared} · 零带出试炼）"
+        elif departure["simulation"] and departure["extracted"]:
             outcome, title = "simulation_complete", "演练结束"
-        elif departure["extracted"]:
-            outcome, title = "extracted", "安全撤离"
-        elif departure.get("protected_by_doll"):
-            outcome, title = "failed", "战败，替身保全"
+            summary = f"{title} · 第 {floor} 层 · 估值 {departure['value']:,} 金"
         else:
-            outcome, title = "failed", "探索失败"
-        reward = f"估值 {departure['value']:,} 金" if departure["simulation"] else f"保住 {departure['value']:,} 金物资"
-        summary = f"{title} · 第 {floor} 层 · {reward}"
+            if departure["extracted"]:
+                outcome, title = "extracted", "安全撤离"
+            elif departure.get("protected_by_doll"):
+                outcome, title = "failed", "战败，替身保全"
+            else:
+                outcome, title = "failed", "探索失败"
+            reward = f"估值 {departure['value']:,} 金" if departure["simulation"] else f"保住 {departure['value']:,} 金物资"
+            summary = f"{title} · 第 {floor} 层 · {reward}"
     else:
         outcome = "ongoing" if run else "idle"
         if scan:
             summary = f"📡 热成像雷达 · F{scan['floor']} 侦测到「{scan['room']}」"
         elif rush and run:
             summary = f"连战至 F{floor} · {rush['reason']}"
-        elif command in ("start", "simulate", "down", "rush") and run:
-            summary = f"抵达第 {floor} 层"
+        elif command in ("start", "simulate", "prophecy_start", "down", "rush") and run:
+            summary = f"✦ 踏入寓言集 F{floor}" if run.get("prophecy") and command == "prophecy_start" else f"抵达第 {floor} 层"
         elif command == "field_pick":
             summary = "临装选择已完成"
         elif battle:

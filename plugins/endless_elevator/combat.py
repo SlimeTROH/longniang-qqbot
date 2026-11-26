@@ -264,8 +264,8 @@ def hurt(run: dict, amount: int, *, strike: bool = False, enemy=None, turn=0, lo
 
 
 def monster(map_data: dict, floor: int, rng: Random, *, elite: bool=False,
-            ambush: bool=False, exclude_name: str="", boss: bool=False) -> dict:
-    rank = expedition.boss_number(floor) if boss else 0
+            ambush: bool=False, exclude_name: str="", boss: bool=False, boss_rank: int | None=None) -> dict:
+    rank = (boss_rank if boss_rank is not None else expedition.boss_number(floor)) if boss else 0
     if boss and not rank:
         raise ValueError("非首领层")
     stats = expedition.enemy_stats(map_data["multiplier"],floor,elite=elite,boss=rank,curve=map_data.get("difficulty"))
